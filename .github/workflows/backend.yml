@@ -1,0 +1,121 @@
+name: Backend Jobs
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Backend Lint
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Code Checkout
+        uses: actions/checkout@v4
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.5"
+          extensions: bcmath, curl, gd, mbstring, mysql, openssl, pdo, tokenizer, xml, zip
+          tools: composer:v2
+          coverage: none
+      - name: Install dependencies
+        run: composer install --no-interaction --no-progress --no-suggest --prefer-dist
+      - name: Lint
+        run: composer lint
+  tests:
+    name: Backend Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      database:
+        image: mariadb:11
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: yes
+          MYSQL_DATABASE: testing
+        ports:
+          - 3306
+    steps:
+      - name: Code Checkout
+        uses: actions/checkout@v4
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.5"
+          extensions: bcmath, curl, gd, mbstring, mysql, openssl, pdo, tokenizer, xml, zip
+          tools: composer:v2
+          coverage: none
+      - name: Install dependencies
+        run: composer install --no-interaction --no-progress --no-suggest --prefer-dist
+      - name: Create storage/config directory
+        run: mkdir -p storage/config
+      - name: Generate encryption key
+        id: encryption_key
+        run: echo "key=$(head -c 32 /dev/urandom | base64)" >> $GITHUB_OUTPUT
+      - name: Create .env file
+        run: |
+          cat > storage/config/.env <<EOF
+          DATABASE_HOST=127.0.0.1
+          DATABASE_PORT=${{ job.services.database.ports[3306] }}
+          DATABASE_DATABASE=testing
+          DATABASE_USER=root
+          DATABASE_PASSWORD=
+          DATABASE_ENCRYPTION="xchacha20"
+          DATABASE_ENCRYPTION_KEY="${{ steps.encryption_key.outputs.key }}"
+          REDIS_HOST=127.0.0.1
+          REDIS_PASSWORD=testredis
+          EOF
+      - name: Verify database connection
+        run: |
+          php -r "
+          \$env = parse_ini_file('storage/config/.env');
+          try {
+            \$pdo = new PDO(
+              'mysql:host=' . \$env['DATABASE_HOST'] . ';port=' . \$env['DATABASE_PORT'] . ';dbname=' . \$env['DATABASE_DATABASE'],
+              \$env['DATABASE_USER'],
+              \$env['DATABASE_PASSWORD']
+            );
+            \$pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+            echo 'Database connection successful!' . PHP_EOL;
+          } catch (Exception \$e) {
+            echo 'Database connection failed: ' . \$e->getMessage() . PHP_EOL;
+            exit(1);
+          }
+          "
+      - name: Run migrations
+        run: |
+          php cli migrate --skip-path-check
+          MIGRATION_EXIT=$?
+          if [ $MIGRATION_EXIT -ne 0 ]; then
+            echo "Migration command exited with code $MIGRATION_EXIT"
+            exit $MIGRATION_EXIT
+          fi
+      - name: Verify migrations ran
+        run: |
+          php -r "
+          \$env = parse_ini_file('storage/config/.env');
+          \$pdo = new PDO(
+            'mysql:host=' . \$env['DATABASE_HOST'] . ';port=' . \$env['DATABASE_PORT'] . ';dbname=' . \$env['DATABASE_DATABASE'],
+            \$env['DATABASE_USER'],
+            \$env['DATABASE_PASSWORD']
+          );
+          \$pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+          \$tables = \$pdo->query('SHOW TABLES')->fetchAll(PDO::FETCH_COLUMN);
+          echo 'Tables created: ' . count(\$tables) . PHP_EOL;
+          if (count(\$tables) < 5) {
+            echo 'ERROR: Expected at least 5 tables, but only found: ' . implode(', ', \$tables) . PHP_EOL;
+            exit(1);
+          }
+          if (!in_array('featherpanel_users', \$tables)) {
+            echo 'ERROR: featherpanel_users table not found!' . PHP_EOL;
+            exit(1);
+          }
+          echo 'Migration verification successful!' . PHP_EOL;
+          "
+      - name: Run tests
+        run: composer tests

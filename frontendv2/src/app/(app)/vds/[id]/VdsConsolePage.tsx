@@ -1,0 +1,723 @@
+/*
+This file is part of FeatherPanel.
+
+Copyright (C) 2025 MythicalSystems Studio
+Copyright (C) 2025 FeatherPanel Contributors
+Copyright (C) 2025 Cassian Gherman (aka NaysKutzu)
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published
+by the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+See the LICENSE file or <https://www.gnu.org/licenses/>.
+*/
+
+'use client';
+
+import { useEffect, useState, useCallback, useRef } from 'react';
+import { useParams, useRouter } from 'next/navigation';
+import axios from 'axios';
+import { useVmInstance } from '@/contexts/VmInstanceContext';
+import { useTranslation } from '@/contexts/TranslationContext';
+import { PageHeader } from '@/components/featherui/PageHeader';
+import { Button } from '@/components/featherui/Button';
+import { usePluginWidgets } from '@/hooks/usePluginWidgets';
+import { WidgetRenderer } from '@/components/server/WidgetRenderer';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { toast } from 'sonner';
+import VdsPerformance from '@/components/vds/VdsPerformance';
+import {
+    Server,
+    Play,
+    Square,
+    RotateCw,
+    Loader2,
+    HardDrive,
+    Database,
+    Monitor,
+    Activity as ActivityIcon,
+    AlertTriangle,
+    Globe,
+    Terminal,
+    RefreshCw,
+    Info,
+    Zap,
+    Eye,
+    EyeOff,
+    Lock,
+} from 'lucide-react';
+import { cn } from '@/lib/utils';
+
+interface VmStatus {
+    status?: string;
+    cpu?: number;
+    cpus?: number;
+    maxcpu?: number;
+    mem?: number;
+    maxmem?: number;
+    disk?: number;
+    maxdisk?: number;
+    uptime?: number;
+    netin?: number;
+    netout?: number;
+    vmid?: number;
+    name?: string;
+}
+
+type TranslateFn = (key: string, params?: Record<string, string>) => string;
+
+function formatMemory(bytes: number): string {
+    if (bytes === 0) return '0 B';
+    if (bytes >= 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+    if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(0)} MB`;
+    return `${(bytes / 1024).toFixed(0)} KB`;
+}
+
+function formatUptime(seconds: number): string {
+    if (!seconds) return '—';
+    const d = Math.floor(seconds / 86400);
+    const h = Math.floor((seconds % 86400) / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+    const parts: string[] = [];
+    if (d > 0) parts.push(`${d}d`);
+    if (h > 0) parts.push(`${h}h`);
+    if (m > 0) parts.push(`${m}m`);
+    if (s > 0 || parts.length === 0) parts.push(`${s}s`);
+    return parts.join(' ');
+}
+
+function formatNetwork(bytes: number): string {
+    if (!bytes) return '0 B';
+    if (bytes >= 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+    if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+    return `${bytes} B`;
+}
+
+function getVmStatusStyles(t: TranslateFn): Record<string, { badge: string; dot: string; label: string }> {
+    return {
+        running: {
+            badge: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
+            dot: 'bg-emerald-400',
+            label: t('vds.console.status.running'),
+        },
+        stopped: {
+            badge: 'bg-red-500/15 text-red-400 border-red-500/30',
+            dot: 'bg-red-400',
+            label: t('vds.console.status.stopped'),
+        },
+        starting: {
+            badge: 'bg-blue-500/15 text-blue-400 border-blue-500/30',
+            dot: 'bg-blue-400 animate-pulse',
+            label: t('vds.console.status.starting'),
+        },
+        stopping: {
+            badge: 'bg-orange-500/15 text-orange-400 border-orange-500/30',
+            dot: 'bg-orange-400 animate-pulse',
+            label: t('vds.console.status.stopping'),
+        },
+        suspended: {
+            badge: 'bg-amber-500/15 text-amber-400 border-amber-500/30',
+            dot: 'bg-amber-400',
+            label: t('vds.console.status.suspended'),
+        },
+        creating: {
+            badge: 'bg-blue-500/15 text-blue-400 border-blue-500/30',
+            dot: 'bg-blue-400 animate-pulse',
+            label: t('vds.console.status.creating'),
+        },
+        reinstalling: {
+            badge: 'bg-blue-500/15 text-blue-400 border-blue-500/30',
+            dot: 'bg-blue-400 animate-pulse',
+            label: t('vds.console.status.reinstalling'),
+        },
+        unknown: {
+            badge: 'bg-muted/50 text-muted-foreground border-border/30',
+            dot: 'bg-muted-foreground',
+            label: t('vds.console.status.unknown'),
+        },
+    };
+}
+
+function StatusBadge({ status, t }: { status: string; t: TranslateFn }) {
+    const vmStatusStyles = getVmStatusStyles(t);
+    const s = vmStatusStyles[status] ?? vmStatusStyles.unknown;
+    return (
+        <span
+            className={cn(
+                'inline-flex items-center gap-2 px-3 py-1 text-sm font-semibold rounded-full border',
+                s.badge,
+            )}
+        >
+            <span className={cn('h-2 w-2 rounded-full shrink-0', s.dot)} />
+            {s.label}
+        </span>
+    );
+}
+
+function StatCard({
+    icon: Icon,
+    label,
+    value,
+    sub,
+}: {
+    icon: React.ComponentType<{ className?: string }>;
+    label: string;
+    value: string;
+    sub?: string;
+}) {
+    return (
+        <Card className='border-border/30 bg-card/60 backdrop-blur-sm shadow-sm'>
+            <CardContent className='flex items-center gap-4 py-4'>
+                <div className='h-10 w-10 rounded-xl flex items-center justify-center bg-primary/10 text-primary'>
+                    <Icon className='h-5 w-5' />
+                </div>
+                <div className='flex flex-col gap-1'>
+                    <span className='text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground'>
+                        {label}
+                    </span>
+                    <div className='flex items-baseline gap-2'>
+                        <span className='text-xl font-semibold'>{value}</span>
+                        {sub && <span className='text-xs text-muted-foreground'>{sub}</span>}
+                    </div>
+                </div>
+            </CardContent>
+        </Card>
+    );
+}
+
+export default function VdsConsolePage() {
+    const { id } = useParams() as { id: string };
+    const router = useRouter();
+    const { t } = useTranslation();
+    const { instance, loading: instanceLoading, refreshInstance, hasPermission } = useVmInstance();
+    const { fetchWidgets, getWidgets } = usePluginWidgets('vds-console');
+
+    const getVdsWidgets = useCallback(
+        (location: string) => {
+            const stableWidgets = getWidgets('vds-console', location);
+            const legacyWidgets = getWidgets(`vds-${id}`, location);
+
+            if (legacyWidgets.length === 0) {
+                return stableWidgets;
+            }
+
+            const stableKeys = new Set(stableWidgets.map((w) => `${w.plugin}:${w.id}`));
+            const uniqueLegacy = legacyWidgets.filter((w) => !stableKeys.has(`${w.plugin}:${w.id}`));
+
+            return [...stableWidgets, ...uniqueLegacy];
+        },
+        [getWidgets, id],
+    );
+
+    const [vmStatus, setVmStatus] = useState<VmStatus | null>(null);
+    const [statusLoading, setStatusLoading] = useState(false);
+    const [powering, setPowering] = useState<string | null>(null);
+    const [vncLoading, setVncLoading] = useState(false);
+    const [showAccessPassword, setShowAccessPassword] = useState(false);
+    const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+    const [cpuData, setCpuData] = useState<{ timestamp: number; value: number }[]>([]);
+    const [memoryData, setMemoryData] = useState<{ timestamp: number; value: number }[]>([]);
+    const [networkRxData, setNetworkRxData] = useState<{ timestamp: number; value: number }[]>([]);
+    const [networkTxData, setNetworkTxData] = useState<{ timestamp: number; value: number }[]>([]);
+    const prevStatsRef = useRef<{ netin: number; netout: number; timestamp: number } | null>(null);
+    const maxDataPoints = 60;
+
+    const fetchStatus = useCallback(async () => {
+        if (!id) return;
+        setStatusLoading(true);
+        try {
+            const { data } = await axios.get(`/api/user/vm-instances/${id}/status`);
+            if (data.success) {
+                const status = data.data.status as VmStatus;
+                setVmStatus(status);
+
+                const now = Date.now();
+
+                setCpuData((prev) => [...prev.slice(-maxDataPoints + 1), { timestamp: now, value: status.cpu ?? 0 }]);
+                setMemoryData((prev) => [
+                    ...prev.slice(-maxDataPoints + 1),
+                    { timestamp: now, value: status.mem ?? 0 },
+                ]);
+
+                if (prevStatsRef.current && status.netin != null && status.netout != null) {
+                    const timeDiff = (now - prevStatsRef.current.timestamp) / 1000;
+                    if (timeDiff > 0) {
+                        const rxDiff = Math.max(0, status.netin - prevStatsRef.current.netin);
+                        const txDiff = Math.max(0, status.netout - prevStatsRef.current.netout);
+
+                        setNetworkRxData((prev) => [
+                            ...prev.slice(-maxDataPoints + 1),
+                            { timestamp: now, value: rxDiff / timeDiff },
+                        ]);
+                        setNetworkTxData((prev) => [
+                            ...prev.slice(-maxDataPoints + 1),
+                            { timestamp: now, value: txDiff / timeDiff },
+                        ]);
+                    }
+                } else {
+                    setNetworkRxData((prev) => [...prev.slice(-maxDataPoints + 1), { timestamp: now, value: 0 }]);
+                    setNetworkTxData((prev) => [...prev.slice(-maxDataPoints + 1), { timestamp: now, value: 0 }]);
+                }
+
+                prevStatsRef.current = {
+                    netin: status.netin ?? 0,
+                    netout: status.netout ?? 0,
+                    timestamp: now,
+                };
+            }
+        } catch {
+            // silent
+        } finally {
+            setStatusLoading(false);
+        }
+    }, [id]);
+
+    useEffect(() => {
+        fetchStatus();
+        pollRef.current = setInterval(fetchStatus, 10000);
+        return () => {
+            if (pollRef.current) clearInterval(pollRef.current);
+        };
+    }, [fetchStatus]);
+
+    useEffect(() => {
+        fetchWidgets();
+    }, [fetchWidgets]);
+
+    const handlePower = async (action: 'start' | 'stop' | 'reboot') => {
+        if (!id) return;
+        setPowering(action);
+        try {
+            const res = await axios.post(`/api/user/vm-instances/${id}/power`, { action });
+            const taskId = res.data?.data?.task_id as string | undefined;
+
+            if (!taskId) {
+                toast.success(t('vds.console.toast.power_completed', { action }));
+                setTimeout(() => {
+                    refreshInstance();
+                    fetchStatus();
+                }, 2000);
+                return;
+            }
+
+            toast.info(res.data?.message ?? t('vds.console.toast.task_queued'));
+
+            // Poll until task is completed or failed
+            const MAX_POLLS = 120; // 6 minutes at 3s interval
+            let polls = 0;
+            const poll = async () => {
+                if (polls >= MAX_POLLS) {
+                    toast.error(t('vds.console.toast.power_timeout'));
+                    setPowering(null);
+                    return;
+                }
+                polls++;
+                try {
+                    const statusRes = await axios.get(`/api/user/vm-instances/task-status/${taskId}`);
+                    const s = statusRes.data?.data;
+                    if (s?.status === 'completed') {
+                        toast.success(t('vds.console.toast.power_completed', { action }));
+                        refreshInstance();
+                        fetchStatus();
+                        setPowering(null);
+                        return;
+                    }
+                    if (s?.status === 'failed') {
+                        toast.error(s?.error ?? t('vds.console.toast.power_failed'));
+                        setPowering(null);
+                        return;
+                    }
+                } catch {
+                    // ignore
+                }
+                setTimeout(() => {
+                    void poll();
+                }, 3000);
+            };
+            void poll();
+        } catch (err) {
+            const msg = axios.isAxiosError(err) ? (err.response?.data?.message ?? err.message) : String(err);
+            toast.error(msg);
+            setPowering(null);
+        }
+    };
+
+    const openVnc = async () => {
+        if (!id) return;
+        setVncLoading(true);
+        try {
+            const { data } = await axios.get(`/api/user/vm-instances/${id}/vnc-ticket`);
+            if (data.success) {
+                const payload = data.data;
+                if (payload.pve_redirect_url) {
+                    window.open(payload.pve_redirect_url, '_blank', 'noopener,noreferrer');
+                } else if (payload.wss_url) {
+                    toast.info(t('vds.console.toast.vnc_wss', { url: payload.wss_url }));
+                }
+            } else {
+                toast.error(data.message || t('vds.console.toast.vnc_failed'));
+            }
+        } catch (err) {
+            const msg = axios.isAxiosError(err) ? (err.response?.data?.message ?? err.message) : String(err);
+            toast.error(msg);
+        } finally {
+            setVncLoading(false);
+        }
+    };
+
+    if (instanceLoading) {
+        return (
+            <div className='flex items-center justify-center min-h-[60vh]'>
+                <div className='flex flex-col items-center gap-4'>
+                    <Loader2 className='h-10 w-10 animate-spin text-primary' />
+                    <p className='text-muted-foreground font-medium animate-pulse'>{t('vds.console.loading')}</p>
+                </div>
+            </div>
+        );
+    }
+
+    if (!instance) {
+        return (
+            <div className='flex items-center justify-center min-h-[60vh]'>
+                <div className='text-center space-y-4'>
+                    <div className='h-20 w-20 mx-auto rounded-3xl bg-destructive/10 border border-destructive/20 flex items-center justify-center'>
+                        <AlertTriangle className='h-10 w-10 text-destructive' />
+                    </div>
+                    <h2 className='text-2xl font-black'>{t('vds.console.not_found_title')}</h2>
+                    <p className='text-muted-foreground'>{t('vds.console.not_found_description')}</p>
+                    <Button variant='outline' onClick={() => router.push('/dashboard')} className='mt-4'>
+                        {t('common.goBack')}
+                    </Button>
+                </div>
+            </div>
+        );
+    }
+
+    const canPower = hasPermission('power');
+    const canConsole = hasPermission('console');
+
+    const ip = instance.ip_pool_address ?? instance.ip_address ?? null;
+    const liveStatus = vmStatus?.status ?? instance.status;
+    const cpuPercent = vmStatus?.cpu != null ? (vmStatus.cpu * 100).toFixed(1) : null;
+    const memUsed = vmStatus?.mem ?? null;
+    const memMax = vmStatus?.maxmem ?? (instance.plan_memory ? instance.plan_memory * 1024 * 1024 : null);
+    const diskUsed = vmStatus?.disk ?? null;
+    const diskMax = vmStatus?.maxdisk ?? (instance.plan_disk ? instance.plan_disk * 1024 * 1024 * 1024 : null);
+    const uptime = vmStatus?.uptime ?? null;
+    const canViewAccessPassword = Boolean(instance.is_owner && instance.access_password);
+
+    return (
+        <div className='space-y-8 pb-12'>
+            <WidgetRenderer widgets={getVdsWidgets('top-of-page')} />
+
+            <PageHeader
+                title={instance.hostname ?? t('vds.console.title')}
+                description={
+                    <div className='flex flex-wrap items-center gap-3 mt-1'>
+                        <StatusBadge status={liveStatus} t={t} />
+                        <span className='text-xs font-black uppercase tracking-widest text-muted-foreground/50 border border-border/20 rounded-full px-2 py-0.5'>
+                            VMID {instance.vmid}
+                        </span>
+                        <span className='text-xs font-black uppercase tracking-widest text-muted-foreground/50 border border-border/20 rounded-full px-2 py-0.5'>
+                            {instance.vm_type?.toUpperCase() ?? 'QEMU'}
+                        </span>
+                        {ip && (
+                            <span className='text-xs font-mono text-muted-foreground/70 flex items-center gap-1'>
+                                <Globe className='h-3.5 w-3.5' />
+                                {ip}
+                            </span>
+                        )}
+                    </div>
+                }
+                actions={
+                    <div className='flex items-center gap-2 flex-wrap'>
+                        <Button
+                            variant='glass'
+                            size='sm'
+                            onClick={() => {
+                                fetchStatus();
+                                refreshInstance();
+                            }}
+                            disabled={statusLoading}
+                        >
+                            <RefreshCw className={cn('h-4 w-4 mr-1.5', statusLoading && 'animate-spin')} />
+                            {t('navigation.items.refresh') || 'Refresh'}
+                        </Button>
+
+                        {canConsole && (
+                            <Button
+                                variant='glass'
+                                size='sm'
+                                onClick={openVnc}
+                                disabled={vncLoading || liveStatus !== 'running'}
+                            >
+                                {vncLoading ? (
+                                    <Loader2 className='h-4 w-4 mr-1.5 animate-spin' />
+                                ) : (
+                                    <Monitor className='h-4 w-4 mr-1.5' />
+                                )}
+                                {t('vds.console.vnc_console') || 'Open Console'}
+                            </Button>
+                        )}
+
+                        {canPower && (
+                            <>
+                                <Button
+                                    variant='glass'
+                                    size='sm'
+                                    className='text-emerald-400 border-emerald-400/20 hover:bg-emerald-400/10'
+                                    disabled={powering !== null || liveStatus === 'running'}
+                                    onClick={() => handlePower('start')}
+                                >
+                                    {powering === 'start' ? (
+                                        <Loader2 className='h-4 w-4 mr-1.5 animate-spin' />
+                                    ) : (
+                                        <Play className='h-4 w-4 mr-1.5' />
+                                    )}
+                                    {t('vds.console.power.start')}
+                                </Button>
+                                <Button
+                                    variant='glass'
+                                    size='sm'
+                                    className='text-amber-400 border-amber-400/20 hover:bg-amber-400/10'
+                                    disabled={powering !== null || liveStatus !== 'running'}
+                                    onClick={() => handlePower('reboot')}
+                                >
+                                    {powering === 'reboot' ? (
+                                        <Loader2 className='h-4 w-4 mr-1.5 animate-spin' />
+                                    ) : (
+                                        <RotateCw className='h-4 w-4 mr-1.5' />
+                                    )}
+                                    {t('vds.console.power.reboot')}
+                                </Button>
+                                <Button
+                                    variant='glass'
+                                    size='sm'
+                                    className='text-red-400 border-red-400/20 hover:bg-red-400/10'
+                                    disabled={powering !== null || liveStatus === 'stopped'}
+                                    onClick={() => handlePower('stop')}
+                                >
+                                    {powering === 'stop' ? (
+                                        <Loader2 className='h-4 w-4 mr-1.5 animate-spin' />
+                                    ) : (
+                                        <Square className='h-4 w-4 mr-1.5' />
+                                    )}
+                                    {t('vds.console.power.kill')}
+                                </Button>
+                            </>
+                        )}
+                    </div>
+                }
+            />
+
+            <WidgetRenderer widgets={getVdsWidgets('after-header')} />
+
+            <VdsPerformance
+                cpuData={cpuData}
+                memoryData={memoryData}
+                networkRxData={networkRxData}
+                networkTxData={networkTxData}
+                cpuLimit={instance.plan_cpus ?? 0}
+                memoryLimit={instance.plan_memory ? instance.plan_memory * 1024 * 1024 : 0}
+            />
+
+            <div className='grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-6'>
+                <StatCard
+                    icon={Zap}
+                    label={t('vds.console.performance.cpu')}
+                    value={cpuPercent != null ? `${cpuPercent}%` : '—'}
+                    sub={`${instance.plan_cpus ?? '?'} × ${instance.plan_cores ?? 1} vCPU`}
+                />
+                <StatCard
+                    icon={Database}
+                    label={t('vds.console.performance.memory')}
+                    value={memUsed != null ? formatMemory(memUsed) : '—'}
+                    sub={memMax != null ? `/ ${formatMemory(memMax)}` : `${instance.plan_memory ?? '?'} MB plan`}
+                />
+                <StatCard
+                    icon={HardDrive}
+                    label={t('vds.console.performance.disk') || 'Disk'}
+                    value={diskUsed != null ? formatMemory(diskUsed) : '—'}
+                    sub={diskMax != null ? `/ ${formatMemory(diskMax)}` : `${instance.plan_disk ?? '?'} GB plan`}
+                />
+                <StatCard
+                    icon={Globe}
+                    label={t('vds.console.performance.network_rx')}
+                    value={vmStatus?.netin != null ? formatNetwork(vmStatus.netin) : '—'}
+                />
+                <StatCard
+                    icon={Globe}
+                    label={t('vds.console.performance.network_tx')}
+                    value={vmStatus?.netout != null ? formatNetwork(vmStatus.netout) : '—'}
+                />
+                <StatCard
+                    icon={ActivityIcon}
+                    label={t('vds.console.performance.uptime')}
+                    value={uptime != null ? formatUptime(uptime) : '—'}
+                />
+            </div>
+
+            <WidgetRenderer widgets={getVdsWidgets('after-stats')} />
+
+            <div className='grid grid-cols-1 lg:grid-cols-2 gap-6'>
+                <Card className='border-border/20 bg-card/30 backdrop-blur-sm'>
+                    <CardHeader className='pb-4'>
+                        <CardTitle className='text-sm font-black uppercase tracking-widest flex items-center gap-2'>
+                            <Info className='h-4 w-4 text-primary' />
+                            {t('vds.console.details.instance_details')}
+                        </CardTitle>
+                    </CardHeader>
+                    <CardContent className='space-y-3'>
+                        {[
+                            { label: t('vds.console.details.hostname'), value: instance.hostname ?? '—' },
+                            { label: t('vds.console.details.vmid'), value: String(instance.vmid) },
+                            { label: t('vds.console.details.type'), value: instance.vm_type?.toUpperCase() ?? 'QEMU' },
+                            { label: t('vds.console.details.status'), value: liveStatus },
+                            { label: t('vds.console.details.ip'), value: ip ?? '—' },
+                            {
+                                label: t('vds.console.details.node'),
+                                value: instance.node_name ?? instance.pve_node ?? '—',
+                            },
+                            { label: t('vds.console.details.plan'), value: instance.plan_name ?? '—' },
+                            {
+                                label: t('vds.console.details.role'),
+                                value: instance.is_owner
+                                    ? t('vds.console.details.role_owner')
+                                    : t('vds.console.details.role_subuser'),
+                            },
+                        ].map(({ label, value }) => (
+                            <div
+                                key={label}
+                                className='flex items-center justify-between py-2 border-b border-border/10 last:border-0'
+                            >
+                                <span className='text-xs font-black uppercase tracking-wider text-muted-foreground/60'>
+                                    {label}
+                                </span>
+                                <span className='text-sm font-bold font-mono'>{value}</span>
+                            </div>
+                        ))}
+                        {canViewAccessPassword && (
+                            <div className='rounded-2xl border border-primary/20 bg-primary/5 p-4 space-y-3'>
+                                <div className='flex items-start justify-between gap-3'>
+                                    <div className='space-y-1'>
+                                        <div className='flex items-center gap-2 text-sm font-black uppercase tracking-widest text-primary/80'>
+                                            <Lock className='h-4 w-4' />
+                                            {t('vds.console.password.title')}
+                                        </div>
+                                        <p className='text-xs text-muted-foreground'>
+                                            {t('vds.console.password.description')}
+                                        </p>
+                                    </div>
+                                    <Button
+                                        variant='glass'
+                                        size='sm'
+                                        onClick={() => setShowAccessPassword((value) => !value)}
+                                    >
+                                        {showAccessPassword ? (
+                                            <EyeOff className='h-4 w-4 mr-1.5' />
+                                        ) : (
+                                            <Eye className='h-4 w-4 mr-1.5' />
+                                        )}
+                                        {showAccessPassword ? t('common.hide') : t('common.show')}
+                                    </Button>
+                                </div>
+                                <div className='rounded-xl border border-border/20 bg-background/60 px-4 py-3'>
+                                    <span
+                                        className={cn(
+                                            'text-sm font-bold font-mono tracking-wide transition-all duration-200',
+                                            !showAccessPassword && 'blur-sm select-none',
+                                        )}
+                                    >
+                                        {instance.access_password}
+                                    </span>
+                                </div>
+                                <p className='text-xs text-amber-300/90'>{t('vds.console.password.change_asap')}</p>
+                            </div>
+                        )}
+                    </CardContent>
+                </Card>
+
+                <Card className='border-border/20 bg-card/30 backdrop-blur-sm'>
+                    <CardHeader className='pb-4'>
+                        <CardTitle className='text-sm font-black uppercase tracking-widest flex items-center gap-2'>
+                            <Terminal className='h-4 w-4 text-primary' />
+                            {t('vds.console.console_access.title')}
+                        </CardTitle>
+                    </CardHeader>
+                    <CardContent className='flex flex-col items-center justify-center py-12 gap-6 text-center'>
+                        {!canConsole ? (
+                            <>
+                                <div className='h-20 w-20 rounded-3xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center'>
+                                    <AlertTriangle className='h-10 w-10 text-amber-400' />
+                                </div>
+                                <div>
+                                    <p className='text-lg font-black'>
+                                        {t('vds.console.console_access.no_access_title')}
+                                    </p>
+                                    <p className='text-muted-foreground text-sm mt-1'>
+                                        {t('vds.console.console_access.no_access_description')}
+                                    </p>
+                                </div>
+                            </>
+                        ) : liveStatus !== 'running' ? (
+                            <>
+                                <div className='h-20 w-20 rounded-3xl bg-muted/20 border border-border/20 flex items-center justify-center'>
+                                    <Server className='h-10 w-10 text-muted-foreground' />
+                                </div>
+                                <div>
+                                    <p className='text-lg font-black'>
+                                        {t('vds.console.console_access.offline_title')}
+                                    </p>
+                                    <p className='text-muted-foreground text-sm mt-1'>
+                                        {t('vds.console.console_access.offline_description')}
+                                    </p>
+                                </div>
+                                {canPower && (
+                                    <Button
+                                        onClick={() => handlePower('start')}
+                                        disabled={powering !== null}
+                                        className='mt-2'
+                                    >
+                                        {powering === 'start' ? (
+                                            <Loader2 className='h-4 w-4 mr-2 animate-spin' />
+                                        ) : (
+                                            <Play className='h-4 w-4 mr-2' />
+                                        )}
+                                        {t('vds.console.console_access.start_instance')}
+                                    </Button>
+                                )}
+                            </>
+                        ) : (
+                            <>
+                                <div className='h-20 w-20 rounded-3xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center'>
+                                    <Monitor className='h-10 w-10 text-emerald-400' />
+                                </div>
+                                <div>
+                                    <p className='text-lg font-black'>{t('vds.console.console_access.ready_title')}</p>
+                                    <p className='text-muted-foreground text-sm mt-1'>
+                                        {t('vds.console.console_access.ready_description')}
+                                    </p>
+                                </div>
+                                <Button onClick={openVnc} disabled={vncLoading} className='mt-2 px-8'>
+                                    {vncLoading ? (
+                                        <Loader2 className='h-4 w-4 mr-2 animate-spin' />
+                                    ) : (
+                                        <Monitor className='h-4 w-4 mr-2' />
+                                    )}
+                                    {t('vds.console.console_access.open_button')}
+                                </Button>
+                                <p className='text-xs text-muted-foreground opacity-50'>
+                                    {t('vds.console.console_access.open_hint')}
+                                </p>
+                            </>
+                        )}
+                    </CardContent>
+                </Card>
+            </div>
+        </div>
+    );
+}

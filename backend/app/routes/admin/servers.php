@@ -1,0 +1,417 @@
+<?php
+
+/*
+ * This file is part of FeatherPanel.
+ *
+ * Copyright (C) 2025 MythicalSystems Studios
+ * Copyright (C) 2025 FeatherPanel Contributors
+ * Copyright (C) 2025 Cassian Gherman (aka NaysKutzu)
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published
+ * by the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * See the LICENSE file or <https://www.gnu.org/licenses/>.
+ */
+
+use App\App;
+use App\Permissions;
+use App\Helpers\ApiResponse;
+use App\Controllers\Admin\MountsController;
+use App\Controllers\Admin\ServersController;
+use Symfony\Component\HttpFoundation\Request;
+use Symfony\Component\Routing\RouteCollection;
+use App\Controllers\Admin\ServerActivitiesController;
+use App\Controllers\Admin\ServerAllocationsController;
+
+return function (RouteCollection $routes): void {
+    App::getInstance(true)->registerAdminRoute(
+        $routes,
+        'admin-servers',
+        '/api/admin/servers',
+        function (Request $request) {
+            return (new ServersController())->index($request);
+        },
+        Permissions::ADMIN_SERVERS_VIEW,
+    );
+    App::getInstance(true)->registerAdminRoute(
+        $routes,
+        'admin-servers-mounts-assignable',
+        '/api/admin/servers/{id}/mounts/assignable',
+        function (Request $request, array $args) {
+            $id = $args['id'] ?? null;
+            if (!$id || !is_numeric($id)) {
+                return ApiResponse::error('Missing or invalid server ID', 'INVALID_SERVER_ID', 400);
+            }
+
+            return (new MountsController())->assignableForServer($request, (int) $id);
+        },
+        Permissions::ADMIN_SERVERS_VIEW,
+    );
+
+    App::getInstance(true)->registerAdminRoute(
+        $routes,
+        'admin-servers-show',
+        '/api/admin/servers/{id}',
+        function (Request $request, array $args) {
+            $id = $args['id'] ?? null;
+            if (!$id || !is_numeric($id)) {
+                return ApiResponse::error('Missing or invalid server ID', 'INVALID_SERVER_ID', 400);
+            }
+
+            return (new ServersController())->show($request, (int) $id);
+        },
+        Permissions::ADMIN_SERVERS_VIEW,
+    );
+    App::getInstance(true)->registerAdminRoute(
+        $routes,
+        'admin-servers-show-by-external-id',
+        '/api/admin/servers/external/{externalId}',
+        function (Request $request, array $args) {
+            $externalId = $args['externalId'] ?? null;
+            if (!$externalId || !is_string($externalId) || trim($externalId) === '') {
+                return ApiResponse::error('Missing or invalid external ID', 'INVALID_EXTERNAL_ID', 400);
+            }
+
+            return (new ServersController())->showByExternalId($request, trim($externalId));
+        },
+        Permissions::ADMIN_SERVERS_VIEW,
+    );
+    App::getInstance(true)->registerAdminRoute(
+        $routes,
+        'admin-servers-update',
+        '/api/admin/servers/{id}',
+        function (Request $request, array $args) {
+            $id = $args['id'] ?? null;
+            if (!$id || !is_numeric($id)) {
+                return ApiResponse::error('Missing or invalid server ID', 'INVALID_SERVER_ID', 400);
+            }
+
+            return (new ServersController())->update($request, (int) $id);
+        },
+        Permissions::ADMIN_SERVERS_EDIT,
+        ['PATCH']
+    );
+    App::getInstance(true)->registerAdminRoute(
+        $routes,
+        'admin-servers-delete',
+        '/api/admin/servers/{id}',
+        function (Request $request, array $args) {
+            $id = $args['id'] ?? null;
+            if (!$id || !is_numeric($id)) {
+                return ApiResponse::error('Missing or invalid server ID', 'INVALID_SERVER_ID', 400);
+            }
+
+            return (new ServersController())->delete($request, (int) $id);
+        },
+        Permissions::ADMIN_SERVERS_DELETE,
+        ['DELETE']
+    );
+    App::getInstance(true)->registerAdminRoute(
+        $routes,
+        'admin-servers-hard-delete',
+        '/api/admin/servers/{id}/hard',
+        function (Request $request, array $args) {
+            $id = $args['id'] ?? null;
+            if (!$id || !is_numeric($id)) {
+                return ApiResponse::error('Missing or invalid server ID', 'INVALID_SERVER_ID', 400);
+            }
+
+            return (new ServersController())->hardDelete($request, (int) $id);
+        },
+        Permissions::ADMIN_SERVERS_DELETE,
+        ['DELETE']
+    );
+    App::getInstance(true)->registerAdminRoute(
+        $routes,
+        'admin-servers-create',
+        '/api/admin/servers',
+        function (Request $request) {
+            return (new ServersController())->create($request);
+        },
+        Permissions::ADMIN_SERVERS_CREATE,
+        ['PUT']
+    );
+    App::getInstance(true)->registerAdminRoute(
+        $routes,
+        'admin-servers-by-owner',
+        '/api/admin/servers/owner/{ownerId}',
+        function (Request $request, array $args) {
+            $ownerId = $args['ownerId'] ?? null;
+            if (!$ownerId || !is_numeric($ownerId)) {
+                return ApiResponse::error('Missing or invalid owner ID', 'INVALID_OWNER_ID', 400);
+            }
+
+            return (new ServersController())->getByOwner($request, (int) $ownerId);
+        },
+        Permissions::ADMIN_SERVERS_VIEW,
+    );
+    App::getInstance(true)->registerAdminRoute(
+        $routes,
+        'admin-servers-by-node',
+        '/api/admin/servers/node/{nodeId}',
+        function (Request $request, array $args) {
+            $nodeId = $args['nodeId'] ?? null;
+            if (!$nodeId || !is_numeric($nodeId)) {
+                return ApiResponse::error('Missing or invalid node ID', 'INVALID_NODE_ID', 400);
+            }
+
+            return (new ServersController())->getByNode($request, (int) $nodeId);
+        },
+        Permissions::ADMIN_SERVERS_VIEW,
+    );
+    App::getInstance(true)->registerAdminRoute(
+        $routes,
+        'admin-servers-by-realm',
+        '/api/admin/servers/realm/{realmId}',
+        function (Request $request, array $args) {
+            $realmId = $args['realmId'] ?? null;
+            if (!$realmId || !is_numeric($realmId)) {
+                return ApiResponse::error('Missing or invalid realm ID', 'INVALID_REALM_ID', 400);
+            }
+
+            return (new ServersController())->getByRealm($request, (int) $realmId);
+        },
+        Permissions::ADMIN_SERVERS_VIEW,
+    );
+    App::getInstance(true)->registerAdminRoute(
+        $routes,
+        'admin-servers-by-spell',
+        '/api/admin/servers/spell/{spellId}',
+        function (Request $request, array $args) {
+            $spellId = $args['spellId'] ?? null;
+            if (!$spellId || !is_numeric($spellId)) {
+                return ApiResponse::error('Missing or invalid spell ID', 'INVALID_SPELL_ID', 400);
+            }
+
+            return (new ServersController())->getBySpell($request, (int) $spellId);
+        },
+        Permissions::ADMIN_SERVERS_VIEW,
+    );
+    App::getInstance(true)->registerAdminRoute(
+        $routes,
+        'admin-servers-with-relations',
+        '/api/admin/servers/{id}/with-relations',
+        function (Request $request, array $args) {
+            $id = $args['id'] ?? null;
+            if (!$id || !is_numeric($id)) {
+                return ApiResponse::error('Missing or invalid server ID', 'INVALID_SERVER_ID', 400);
+            }
+
+            return (new ServersController())->getWithRelations($request, (int) $id);
+        },
+        Permissions::ADMIN_SERVERS_VIEW,
+    );
+    App::getInstance(true)->registerAdminRoute(
+        $routes,
+        'admin-servers-all-with-relations',
+        '/api/admin/servers/with-relations',
+        function (Request $request) {
+            return (new ServersController())->getAllWithRelations($request);
+        },
+        Permissions::ADMIN_SERVERS_VIEW,
+    );
+    App::getInstance(true)->registerAdminRoute(
+        $routes,
+        'admin-servers-variables',
+        '/api/admin/servers/{id}/variables',
+        function (Request $request, array $args) {
+            $id = $args['id'] ?? null;
+            if (!$id || !is_numeric($id)) {
+                return ApiResponse::error('Missing or invalid server ID', 'INVALID_SERVER_ID', 400);
+            }
+
+            return (new ServersController())->getServerVariables($request, (int) $id);
+        },
+        Permissions::ADMIN_SERVERS_VIEW,
+    );
+
+    // Suspend a server
+    App::getInstance(true)->registerAdminRoute(
+        $routes,
+        'admin-servers-suspend',
+        '/api/admin/servers/{id}/suspend',
+        function (Request $request, array $args) {
+            $id = $args['id'] ?? null;
+            if (!$id || !is_numeric($id)) {
+                return ApiResponse::error('Missing or invalid server ID', 'INVALID_SERVER_ID', 400);
+            }
+
+            return (new ServersController())->suspend($request, (int) $id);
+        },
+        Permissions::ADMIN_SERVERS_EDIT,
+        ['POST']
+    );
+
+    // Unsuspend a server
+    App::getInstance(true)->registerAdminRoute(
+        $routes,
+        'admin-servers-unsuspend',
+        '/api/admin/servers/{id}/unsuspend',
+        function (Request $request, array $args) {
+            $id = $args['id'] ?? null;
+            if (!$id || !is_numeric($id)) {
+                return ApiResponse::error('Missing or invalid server ID', 'INVALID_SERVER_ID', 400);
+            }
+
+            return (new ServersController())->unsuspend($request, (int) $id);
+        },
+        Permissions::ADMIN_SERVERS_EDIT,
+        ['POST']
+    );
+
+    // Server activities (paginated)
+    App::getInstance(true)->registerAdminRoute(
+        $routes,
+        'admin-server-activities',
+        '/api/admin/server-activities',
+        function (Request $request) {
+            return (new ServerActivitiesController())->index($request);
+        },
+        Permissions::ADMIN_SERVERS_VIEW,
+    );
+
+    App::getInstance(true)->registerAdminRoute(
+        $routes,
+        'admin-server-activities-by-server',
+        '/api/admin/servers/{id}/activities',
+        function (Request $request, array $args) {
+            $id = $args['id'] ?? null;
+            if (!$id || !is_numeric($id)) {
+                return ApiResponse::error('Missing or invalid server ID', 'INVALID_SERVER_ID', 400);
+            }
+
+            return (new ServerActivitiesController())->byServer($request, (int) $id);
+        },
+        Permissions::ADMIN_SERVERS_VIEW,
+    );
+
+    // Server allocations - Get allocations
+    App::getInstance(true)->registerAdminRoute(
+        $routes,
+        'admin-servers-allocations',
+        '/api/admin/servers/{id}/allocations',
+        function (Request $request, array $args) {
+            $id = $args['id'] ?? null;
+            if (!$id || !is_numeric($id)) {
+                return ApiResponse::error('Missing or invalid server ID', 'INVALID_SERVER_ID', 400);
+            }
+
+            return (new ServerAllocationsController())->getServerAllocations($request, (int) $id);
+        },
+        Permissions::ADMIN_SERVERS_VIEW,
+    );
+
+    // Server allocations - Assign allocation
+    App::getInstance(true)->registerAdminRoute(
+        $routes,
+        'admin-servers-allocations-assign',
+        '/api/admin/servers/{id}/allocations',
+        function (Request $request, array $args) {
+            $id = $args['id'] ?? null;
+            if (!$id || !is_numeric($id)) {
+                return ApiResponse::error('Missing or invalid server ID', 'INVALID_SERVER_ID', 400);
+            }
+
+            return (new ServerAllocationsController())->assignAllocation($request, (int) $id);
+        },
+        Permissions::ADMIN_SERVERS_EDIT,
+        ['POST']
+    );
+
+    // Server allocations - Delete allocation
+    App::getInstance(true)->registerAdminRoute(
+        $routes,
+        'admin-servers-allocations-delete',
+        '/api/admin/servers/{serverId}/allocations/{allocationId}',
+        function (Request $request, array $args) {
+            $serverId = $args['serverId'] ?? null;
+            $allocationId = $args['allocationId'] ?? null;
+
+            if (!$serverId || !is_numeric($serverId)) {
+                return ApiResponse::error('Missing or invalid server ID', 'INVALID_SERVER_ID', 400);
+            }
+            if (!$allocationId || !is_numeric($allocationId)) {
+                return ApiResponse::error('Missing or invalid allocation ID', 'INVALID_ALLOCATION_ID', 400);
+            }
+
+            return (new ServerAllocationsController())->deleteAllocation($request, (int) $serverId, (int) $allocationId);
+        },
+        Permissions::ADMIN_SERVERS_EDIT,
+        ['DELETE']
+    );
+
+    // Server allocations - Set primary
+    App::getInstance(true)->registerAdminRoute(
+        $routes,
+        'admin-servers-allocations-set-primary',
+        '/api/admin/servers/{serverId}/allocations/{allocationId}/primary',
+        function (Request $request, array $args) {
+            $serverId = $args['serverId'] ?? null;
+            $allocationId = $args['allocationId'] ?? null;
+
+            if (!$serverId || !is_numeric($serverId)) {
+                return ApiResponse::error('Missing or invalid server ID', 'INVALID_SERVER_ID', 400);
+            }
+            if (!$allocationId || !is_numeric($allocationId)) {
+                return ApiResponse::error('Missing or invalid allocation ID', 'INVALID_ALLOCATION_ID', 400);
+            }
+
+            return (new ServerAllocationsController())->setPrimaryAllocation($request, (int) $serverId, (int) $allocationId);
+        },
+        Permissions::ADMIN_SERVERS_EDIT,
+        ['POST']
+    );
+
+    // Server transfers - Initiate transfer
+    App::getInstance(true)->registerAdminRoute(
+        $routes,
+        'admin-servers-transfer-initiate',
+        '/api/admin/servers/{id}/transfer',
+        function (Request $request, array $args) {
+            $id = $args['id'] ?? null;
+            if (!$id || !is_numeric($id)) {
+                return ApiResponse::error('Missing or invalid server ID', 'INVALID_SERVER_ID', 400);
+            }
+
+            return (new ServersController())->initiateTransfer($request, (int) $id);
+        },
+        Permissions::ADMIN_SERVERS_EDIT,
+        ['POST']
+    );
+
+    // Server transfers - Get transfer status
+    App::getInstance(true)->registerAdminRoute(
+        $routes,
+        'admin-servers-transfer-status',
+        '/api/admin/servers/{id}/transfer',
+        function (Request $request, array $args) {
+            $id = $args['id'] ?? null;
+            if (!$id || !is_numeric($id)) {
+                return ApiResponse::error('Missing or invalid server ID', 'INVALID_SERVER_ID', 400);
+            }
+
+            return (new ServersController())->getTransferStatus($request, (int) $id);
+        },
+        Permissions::ADMIN_SERVERS_VIEW,
+        ['GET']
+    );
+
+    // Server transfers - Cancel transfer
+    App::getInstance(true)->registerAdminRoute(
+        $routes,
+        'admin-servers-transfer-cancel',
+        '/api/admin/servers/{id}/transfer',
+        function (Request $request, array $args) {
+            $id = $args['id'] ?? null;
+            if (!$id || !is_numeric($id)) {
+                return ApiResponse::error('Missing or invalid server ID', 'INVALID_SERVER_ID', 400);
+            }
+
+            return (new ServersController())->cancelTransfer($request, (int) $id);
+        },
+        Permissions::ADMIN_SERVERS_EDIT,
+        ['DELETE']
+    );
+};

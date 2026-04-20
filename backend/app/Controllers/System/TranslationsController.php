@@ -1,0 +1,310 @@
+<?php
+
+/*
+ * This file is part of FeatherPanel.
+ *
+ * Copyright (C) 2025 MythicalSystems Studios
+ * Copyright (C) 2025 FeatherPanel Contributors
+ * Copyright (C) 2025 Cassian Gherman (aka NaysKutzu)
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published
+ * by the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * See the LICENSE file or <https://www.gnu.org/licenses/>.
+ */
+
+namespace App\Controllers\System;
+
+use App\App;
+use App\Cache\Cache;
+use App\Helpers\ApiResponse;
+use OpenApi\Attributes as OA;
+use Symfony\Component\HttpFoundation\Request;
+use Symfony\Component\HttpFoundation\Response;
+
+#[OA\Schema(
+    schema: 'Translations',
+    type: 'object',
+    description: 'Translation key-value pairs'
+)]
+class TranslationsController
+{
+    #[OA\Get(
+        path: '/api/system/translations/{lang}',
+        summary: 'Get translations',
+        description: 'Retrieve translation strings for a specific language. Falls back to English if language file not found.',
+        tags: ['System'],
+        parameters: [
+            new OA\Parameter(
+                name: 'lang',
+                in: 'path',
+                description: 'Language code (e.g., en, de, fr)',
+                required: true,
+                schema: new OA\Schema(type: 'string', example: 'en')
+            ),
+        ],
+        responses: [
+            new OA\Response(
+                response: 200,
+                description: 'Translations retrieved successfully',
+                content: new OA\JsonContent(ref: '#/components/schemas/Translations')
+            ),
+            new OA\Response(response: 404, description: 'Translation file not found'),
+        ]
+    )]
+    public function getTranslations(Request $request, string $lang): Response
+    {
+        $lang = $this->normalizeLanguageCode($lang);
+        if ($lang === '') {
+            $lang = 'en';
+        }
+
+        $translationsPath = $this->resolveTranslationPath($lang);
+
+        // Check cache first (only if APP_DEBUG is false)
+        $cacheKey = 'translations:' . $lang;
+        $useCache = !defined('APP_DEBUG') || APP_DEBUG !== true;
+
+        if ($useCache) {
+            $cached = Cache::get($cacheKey);
+            if ($cached !== null) {
+                // Set cache headers for production
+                $response = ApiResponse::sendManualResponse($cached, 200);
+                $response->headers->set('Cache-Control', 'public, max-age=3600');
+                $response->headers->set('Expires', gmdate('D, d M Y H:i:s', time() + 3600) . ' GMT');
+
+                return $response;
+            }
+        }
+
+        // Check if translation file exists (resolveTranslationPath should already have applied fallbacks).
+        if (!file_exists($translationsPath)) {
+            // If English also doesn't exist, return empty object (direct JSON, not wrapped)
+            if (!file_exists($translationsPath)) {
+                $response = ApiResponse::sendManualResponse([], 200);
+                if ($useCache) {
+                    $response->headers->set('Cache-Control', 'public, max-age=3600');
+                } else {
+                    $response->headers->set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+                }
+
+                return $response;
+            }
+        }
+
+        // Read and parse JSON file
+        $content = file_get_contents($translationsPath);
+        if ($content === false) {
+            return ApiResponse::error('Failed to read translation file', 'FILE_READ_ERROR', 500);
+        }
+
+        $translations = json_decode($content, true);
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            return ApiResponse::error('Invalid JSON in translation file', 'JSON_ERROR', 500);
+        }
+
+        // Cache translations (only if APP_DEBUG is false)
+        // Cache::put uses minutes, so 3600 seconds = 60 minutes
+        if ($useCache) {
+            Cache::put($cacheKey, $translations, 60); // Cache for 1 hour (60 minutes)
+        }
+
+        // Set cache headers based on APP_DEBUG
+        $response = ApiResponse::sendManualResponse($translations, 200);
+        if ($useCache) {
+            $response->headers->set('Cache-Control', 'public, max-age=3600');
+            $response->headers->set('Expires', gmdate('D, d M Y H:i:s', time() + 3600) . ' GMT');
+        } else {
+            // No cache when in debug mode
+            $response->headers->set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+            $response->headers->set('Pragma', 'no-cache');
+            $response->headers->set('Expires', '0');
+        }
+
+        return $response;
+    }
+
+    public function getLanguages(Request $request): Response
+    {
+        $translationsDir = APP_PUBLIC . '/translations';
+        $languages = [];
+        $languageMapping = $this->getLanguageMapping();
+
+        // Get enabled languages from settings
+        $enabledLanguages = $this->getEnabledLanguages();
+
+        // Scan translations directory for available language files
+        if (is_dir($translationsDir)) {
+            $files = scandir($translationsDir);
+            foreach ($files as $file) {
+                // Skip mapping.json file
+                if ($file === 'mapping.json') {
+                    continue;
+                }
+
+                if (preg_match('/^([a-z]{2}(?:-[a-z]{2})?)\.json$/i', $file, $matches)) {
+                    $code = $this->normalizeLanguageCode($matches[1]);
+
+                    // Filter by enabled languages if setting exists
+                    if ($enabledLanguages !== null && !in_array($code, $enabledLanguages, true)) {
+                        continue;
+                    }
+
+                    // Get language info from mapping, or use fallback
+                    $langInfo = $languageMapping[$code]
+                        ?? $languageMapping[str_replace('-', '_', $code)]
+                        ?? [
+                            'name' => ucfirst($code),
+                            'nativeName' => ucfirst($code),
+                        ];
+
+                    $languages[] = [
+                        'code' => $code,
+                        'name' => $langInfo['name'] ?? ucfirst($code),
+                        'nativeName' => $langInfo['nativeName'] ?? ucfirst($code),
+                    ];
+                }
+            }
+        }
+
+        // If no languages found, return default English (always enabled)
+        if (empty($languages)) {
+            $languages = [
+                [
+                    'code' => 'en',
+                    'name' => 'English',
+                    'nativeName' => 'English',
+                ],
+            ];
+        }
+
+        return ApiResponse::success($languages, 'Available languages retrieved successfully', 200);
+    }
+
+    /**
+     * Normalize language codes to lowercase with dash separators (e.g. en-US -> en-us).
+     */
+    private function normalizeLanguageCode(string $lang): string
+    {
+        $lang = str_replace('_', '-', trim($lang));
+        $lang = preg_replace('/[^a-zA-Z0-9-]/', '', $lang) ?? '';
+
+        return strtolower($lang);
+    }
+
+    /**
+     * Resolve a translation file path with sensible fallbacks.
+     */
+    private function resolveTranslationPath(string $lang): string
+    {
+        $translationsDir = APP_PUBLIC . '/translations';
+        $normalized = $this->normalizeLanguageCode($lang);
+        $baseLanguage = explode('-', $normalized)[0] ?? 'en';
+        $candidates = array_values(array_unique([
+            $normalized,
+            $baseLanguage,
+            'en',
+        ]));
+
+        foreach ($candidates as $candidate) {
+            $path = $translationsDir . '/' . $candidate . '.json';
+            if (file_exists($path)) {
+                return $path;
+            }
+        }
+
+        // Return default fallback path even if it doesn't exist; caller handles final existence check.
+        return $translationsDir . '/en.json';
+    }
+
+    #[OA\Get(
+        path: '/api/system/translations/languages',
+        summary: 'Get available languages',
+        description: 'Retrieve list of available translation languages',
+        tags: ['System'],
+        responses: [
+            new OA\Response(
+                response: 200,
+                description: 'Available languages retrieved successfully',
+                content: new OA\JsonContent(
+                    type: 'array',
+                    items: new OA\Items(
+                        type: 'object',
+                        properties: [
+                            new OA\Property(property: 'code', type: 'string', example: 'en'),
+                            new OA\Property(property: 'name', type: 'string', example: 'English'),
+                            new OA\Property(property: 'nativeName', type: 'string', example: 'English'),
+                        ]
+                    )
+                )
+            ),
+        ]
+    )]
+    /**
+     * Get enabled languages from settings
+     * Returns null if not set (meaning all languages are enabled)
+     * Returns array of language codes if set.
+     */
+    private function getEnabledLanguages(): ?array
+    {
+        try {
+            $app = App::getInstance(true);
+            $config = $app->getConfig();
+            $enabledLangsJson = $config->getSetting('enabled_languages', null);
+
+            if ($enabledLangsJson === null) {
+                // If not set, return null to allow all languages (backward compatibility)
+                return null;
+            }
+
+            $enabledLangs = json_decode($enabledLangsJson, true);
+            if (!is_array($enabledLangs)) {
+                return null; // Invalid JSON means all languages enabled
+            }
+
+            return array_values(array_unique(array_map(
+                fn ($code) => $this->normalizeLanguageCode((string) $code),
+                $enabledLangs
+            )));
+        } catch (\Exception $e) {
+            // If error, return null to allow all languages
+            return null;
+        }
+    }
+
+    /**
+     * Load language mapping from mapping.json file.
+     */
+    private function getLanguageMapping(): array
+    {
+        static $mapping = null;
+
+        if ($mapping !== null) {
+            return $mapping;
+        }
+
+        $mappingPath = APP_PUBLIC . '/translations/mapping.json';
+        $mapping = [];
+
+        if (file_exists($mappingPath)) {
+            $content = file_get_contents($mappingPath);
+            if ($content !== false) {
+                $decoded = json_decode($content, true);
+                if (is_array($decoded)) {
+                    $mapping = $decoded;
+                }
+            }
+        }
+
+        // Fallback to English if mapping file doesn't exist or is invalid
+        if (empty($mapping)) {
+            $mapping = [
+                'en' => ['name' => 'English', 'nativeName' => 'English'],
+            ];
+        }
+
+        return $mapping;
+    }
+}

@@ -1,0 +1,282 @@
+<?php
+
+/*
+ * This file is part of FeatherPanel.
+ *
+ * Copyright (C) 2025 MythicalSystems Studios
+ * Copyright (C) 2025 FeatherPanel Contributors
+ * Copyright (C) 2025 Cassian Gherman (aka NaysKutzu)
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published
+ * by the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * See the LICENSE file or <https://www.gnu.org/licenses/>.
+ */
+
+namespace App\Services\Chatbot\Tools;
+
+use App\App;
+use App\Chat\Node;
+use App\Chat\Backup;
+use App\Chat\Server;
+use App\Chat\ServerActivity;
+use App\Services\Wings\Wings;
+use App\Helpers\ServerGateway;
+use App\Services\Backup\BackupFifoEviction;
+use App\Plugins\Events\Events\ServerBackupEvent;
+
+/**
+ * Tool to create a backup for a server.
+ */
+class CreateBackupTool implements ToolInterface
+{
+    private $app;
+
+    public function __construct()
+    {
+        $this->app = App::getInstance(true);
+    }
+
+    public function execute(array $params, array $user, array $pageContext = []): mixed
+    {
+        // Get server identifier
+        $serverIdentifier = $params['server_uuid'] ?? $params['server_name'] ?? null;
+        $server = null;
+
+        // If no identifier provided, try to get server from pageContext
+        if (!$serverIdentifier && isset($pageContext['server'])) {
+            $contextServer = $pageContext['server'];
+            $serverUuidShort = $contextServer['uuidShort'] ?? null;
+
+            if ($serverUuidShort) {
+                $server = Server::getServerByUuidShort($serverUuidShort);
+            }
+        }
+
+        // Resolve server if identifier provided
+        if ($serverIdentifier && !$server) {
+            $server = Server::getServerByUuid($serverIdentifier);
+
+            if (!$server) {
+                $server = Server::getServerByUuidShort($serverIdentifier);
+            }
+
+            if (!$server) {
+                $servers = Server::searchServers(
+                    page: 1,
+                    limit: 10,
+                    search: $serverIdentifier,
+                    ownerId: $user['id']
+                );
+                if (!empty($servers)) {
+                    $server = $servers[0];
+                }
+            }
+        }
+
+        if (!$server) {
+            return [
+                'success' => false,
+                'error' => 'Server not found. Please specify a server UUID or name, or ensure you are viewing a server page.',
+                'action_type' => 'create_backup',
+            ];
+        }
+
+        // Verify user has access
+        if (!ServerGateway::canUserAccessServer($user['uuid'], $server['uuid'])) {
+            return [
+                'success' => false,
+                'error' => 'Access denied to server',
+                'action_type' => 'create_backup',
+            ];
+        }
+
+        // Get node information (needed for limit / FIFO eviction)
+        $node = Node::getNodeById($server['node_id']);
+        if (!$node) {
+            return [
+                'success' => false,
+                'error' => 'Node not found',
+                'action_type' => 'create_backup',
+            ];
+        }
+
+        $currentBackups = count(Backup::getBackupsByServerId((int) $server['id']));
+        $backupLimit = (int) ($server['backup_limit'] ?? 1);
+
+        if ($backupLimit > 0 && $currentBackups >= $backupLimit) {
+            if (!BackupFifoEviction::isFifoRollingForServer($server)) {
+                return [
+                    'success' => false,
+                    'error' => 'Backup limit reached for this server',
+                    'action_type' => 'create_backup',
+                    'current_count' => $currentBackups,
+                    'limit' => $backupLimit,
+                ];
+            }
+            try {
+                $wingsFifo = new Wings(
+                    $node['fqdn'],
+                    (int) $node['daemonListen'],
+                    $node['scheme'],
+                    $node['daemon_token'],
+                    30
+                );
+            } catch (\Exception $e) {
+                $this->app->getLogger()->error('CreateBackupTool FIFO: ' . $e->getMessage());
+
+                return [
+                    'success' => false,
+                    'error' => 'Failed to connect to node for backup rotation',
+                    'action_type' => 'create_backup',
+                ];
+            }
+            $evict = BackupFifoEviction::evictOldestWingsBackup((int) $server['id'], (string) $server['uuid'], $wingsFifo);
+            if ($evict !== null) {
+                return [
+                    'success' => false,
+                    'error' => $evict['message'],
+                    'action_type' => 'create_backup',
+                    'code' => $evict['code'],
+                ];
+            }
+        }
+
+        // Generate backup UUID
+        $backupUuid = $this->generateUuid();
+
+        // Generate backup name
+        $backupName = $params['name'] ?? 'Backup at ' . date('Y-m-d H:i:s');
+
+        // Get ignore files
+        $ignoredFiles = $params['ignore'] ?? '[]';
+        if (is_array($ignoredFiles)) {
+            $ignoredFiles = json_encode($ignoredFiles);
+        }
+
+        // Create backup record in database
+        $backupData = [
+            'server_id' => $server['id'],
+            'uuid' => $backupUuid,
+            'name' => $backupName,
+            'ignored_files' => $ignoredFiles,
+            'disk' => 'wings',
+            'is_successful' => 0,
+            'is_locked' => 1, // Lock while backup is in progress
+        ];
+
+        $backupId = Backup::createBackup($backupData);
+        if (!$backupId) {
+            return [
+                'success' => false,
+                'error' => 'Failed to create backup record',
+                'action_type' => 'create_backup',
+            ];
+        }
+
+        // Initiate backup on Wings
+        try {
+            $wings = new Wings(
+                $node['fqdn'],
+                $node['daemonListen'],
+                $node['scheme'],
+                $node['daemon_token'],
+                30
+            );
+
+            $response = $wings->getServer()->createBackup($server['uuid'], 'wings', $backupUuid, $ignoredFiles);
+
+            if (!$response->isSuccessful()) {
+                // Rollback database record
+                Backup::deleteBackup($backupId);
+
+                $error = $response->getError();
+
+                return [
+                    'success' => false,
+                    'error' => 'Failed to initiate backup on Wings: ' . $error,
+                    'action_type' => 'create_backup',
+                ];
+            }
+        } catch (\Exception $e) {
+            // Rollback database record
+            Backup::deleteBackup($backupId);
+            $this->app->getLogger()->error('CreateBackupTool error: ' . $e->getMessage());
+
+            return [
+                'success' => false,
+                'error' => 'Failed to initiate backup: ' . $e->getMessage(),
+                'action_type' => 'create_backup',
+            ];
+        }
+
+        // Log activity
+        ServerActivity::createActivity([
+            'server_id' => $server['id'],
+            'node_id' => $server['node_id'],
+            'user_id' => $user['id'],
+            'event' => 'backup_created',
+            'metadata' => json_encode([
+                'backup_uuid' => $backupUuid,
+                'backup_name' => $backupName,
+            ]),
+        ]);
+
+        // Emit event
+        global $eventManager;
+        if (isset($eventManager) && $eventManager !== null) {
+            $eventManager->emit(
+                ServerBackupEvent::onServerBackupCreated(),
+                [
+                    'user_uuid' => $user['uuid'],
+                    'server_uuid' => $server['uuid'],
+                    'backup_uuid' => $backupUuid,
+                    'backup_data' => [
+                        'id' => $backupId,
+                        'uuid' => $backupUuid,
+                        'name' => $backupName,
+                    ],
+                ]
+            );
+        }
+
+        return [
+            'success' => true,
+            'action_type' => 'create_backup',
+            'backup_id' => $backupId,
+            'backup_uuid' => $backupUuid,
+            'backup_name' => $backupName,
+            'server_name' => $server['name'],
+            'message' => "Backup '{$backupName}' created successfully for server '{$server['name']}'",
+        ];
+    }
+
+    public function getDescription(): string
+    {
+        return 'Create a new backup for a server. The backup will be initiated immediately and run in the background. Returns backup details upon successful creation.';
+    }
+
+    public function getParameters(): array
+    {
+        return [
+            'server_uuid' => 'Server UUID (optional, can use server_name instead)',
+            'server_name' => 'Server name (optional, can use server_uuid instead)',
+            'name' => 'Backup name (optional, will be auto-generated if not provided)',
+            'ignore' => 'JSON array of files to ignore (optional, default: [])',
+        ];
+    }
+
+    /**
+     * Generate UUID v4.
+     */
+    private function generateUuid(): string
+    {
+        $data = random_bytes(16);
+        $data[6] = chr(ord($data[6]) & 0x0F | 0x40); // set version to 0100
+        $data[8] = chr(ord($data[8]) & 0x3F | 0x80); // set bits 6-7 to 10
+
+        return vsprintf('%s%s-%s-%s-%s-%s%s%s', str_split(bin2hex($data), 4));
+    }
+}

@@ -1,0 +1,205 @@
+/*
+This file is part of FeatherPanel.
+
+Copyright (C) 2025 MythicalSystems Studios
+Copyright (C) 2025 FeatherPanel Contributors
+Copyright (C) 2025 Cassian Gherman (aka NaysKutzu)
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published
+by the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+See the LICENSE file or <https://www.gnu.org/licenses/>.
+*/
+
+'use client';
+
+import React, { createContext, useContext, useEffect, useState, useCallback, ReactNode } from 'react';
+import axios from 'axios';
+import { Server } from '@/types/server';
+import { useSession } from '@/contexts/SessionContext';
+import PermissionsClass from '@/lib/permissions';
+
+const hasStaffServerAccess = (check: (perm: string) => boolean): boolean =>
+    check(PermissionsClass.ADMIN_SERVERS_VIEW) ||
+    check(PermissionsClass.ADMIN_SERVERS_EDIT) ||
+    check(PermissionsClass.ADMIN_SERVERS_DELETE);
+
+interface ServerContextType {
+    server: Server | null;
+    loading: boolean;
+    error: Error | null;
+    refreshServer: () => Promise<void>;
+    hasPermission: (permission: string) => boolean;
+}
+
+export const ServerContext = createContext<ServerContextType | undefined>(undefined);
+
+interface ServerProviderProps {
+    children: ReactNode;
+    uuidShort: string;
+    initialServer?: Server | null;
+}
+
+export function ServerProvider({ children, uuidShort, initialServer }: ServerProviderProps) {
+    const [server, setServer] = useState<Server | null>(initialServer || null);
+    const [loading, setLoading] = useState(!initialServer);
+    const [error, setError] = useState<Error | null>(null);
+    const { user: sessionUser, hasPermission: hasGlobalPermission } = useSession();
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        if (!uuidShort) return;
+
+        if (!server) return;
+
+        try {
+            const STORAGE_KEY = 'featherpanel_recent_servers_v1';
+            type RecentEntry = {
+                uuidShort: string;
+                lastViewedAt: string;
+            };
+
+            const existingRaw = window.localStorage.getItem(STORAGE_KEY);
+            let existing: RecentEntry[] = [];
+
+            if (existingRaw) {
+                try {
+                    existing = JSON.parse(existingRaw) as RecentEntry[];
+                    if (!Array.isArray(existing)) existing = [];
+                } catch {
+                    existing = [];
+                }
+            }
+
+            const filtered = existing.filter((entry) => entry.uuidShort !== uuidShort);
+
+            const updated: RecentEntry[] = [
+                {
+                    uuidShort,
+                    lastViewedAt: new Date().toISOString(),
+                },
+                ...filtered,
+            ].slice(0, 10);
+
+            window.localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+        } catch (e) {
+            console.error('Failed to update recent servers list', e);
+        }
+    }, [uuidShort, server]);
+
+    const fetchServer = useCallback(async () => {
+        if (!uuidShort) return;
+
+        if (!server) {
+            setLoading(true);
+        }
+
+        try {
+            const { data } = await axios.get<{ success: boolean; data: Server }>(`/api/user/servers/${uuidShort}`);
+
+            if (data.success) {
+                setServer(data.data);
+                setError(null);
+            }
+        } catch (err) {
+            console.error('Failed to fetch server:', err);
+
+            // Check if it's a suspended server error (403 with SERVER_SUSPENDED code)
+            if (axios.isAxiosError(err) && err.response?.status === 403) {
+                const errorData = err.response.data;
+                if (errorData?.error_code === 'SERVER_SUSPENDED') {
+                    // For suspended servers, create a minimal server object so UI can render with banner
+                    const suspendedServer: Server = {
+                        id: 0,
+                        uuid: '',
+                        uuidShort,
+                        identifier: uuidShort,
+                        name: 'Suspended Server',
+                        description: '',
+                        status: 'suspended',
+                        suspended: 1,
+                        user_id: 0,
+                        owner_id: 0,
+                        node_id: 0,
+                        realm_id: 0,
+                        spell_id: 0,
+                        memory: 0,
+                        swap: 0,
+                        disk: 0,
+                        io: 0,
+                        cpu: 0,
+                        allocation_id: 0,
+                        allocation_limit: 0,
+                        database_limit: 0,
+                        backup_limit: 0,
+                        created_at: '',
+                        updated_at: '',
+                        is_subuser: false,
+                    };
+                    setServer(suspendedServer);
+                    setError(null);
+                    return;
+                }
+            }
+
+            setError(err as Error);
+        } finally {
+            setLoading(false);
+        }
+    }, [uuidShort, server]);
+
+    useEffect(() => {
+        if (!initialServer) {
+            fetchServer();
+        } else {
+            setServer(initialServer);
+            setLoading(false);
+        }
+    }, [uuidShort, initialServer, fetchServer]);
+
+    const hasPermission = useCallback(
+        (permission: string): boolean => {
+            if (hasGlobalPermission(PermissionsClass.ADMIN_ROOT)) return true;
+
+            if (!server || !sessionUser) return false;
+
+            if (String(server.owner_id) === String(sessionUser.id)) return true;
+
+            if (server.is_subuser && server.subuser_permissions) {
+                return server.subuser_permissions.includes('*') || server.subuser_permissions.includes(permission);
+            }
+
+            // Match ServerMiddleware + JWT: staff with server admin access can use the server UI the same as owners.
+            if (hasStaffServerAccess(hasGlobalPermission)) {
+                return true;
+            }
+
+            return false;
+        },
+        [server, sessionUser, hasGlobalPermission],
+    );
+
+    return (
+        <ServerContext.Provider
+            value={{
+                server,
+                loading,
+                error,
+                refreshServer: fetchServer,
+                hasPermission,
+            }}
+        >
+            {children}
+        </ServerContext.Provider>
+    );
+}
+
+export function useServer() {
+    const context = useContext(ServerContext);
+    if (context === undefined) {
+        throw new Error('useServer must be used within a ServerProvider');
+    }
+    return context;
+}

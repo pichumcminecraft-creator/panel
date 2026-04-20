@@ -1,0 +1,116 @@
+/*
+This file is part of FeatherPanel.
+
+Copyright (C) 2025 MythicalSystems Studios
+Copyright (C) 2025 FeatherPanel Contributors
+Copyright (C) 2025 Cassian Gherman (aka NaysKutzu)
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published
+by the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+See the LICENSE file or <https://www.gnu.org/licenses/>.
+*/
+
+import React from 'react';
+import { useTranslation } from '@/contexts/TranslationContext';
+import { PageCard } from '@/components/featherui/PageCard';
+import { Network, Globe, Copy, RefreshCw, AlertTriangle } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/featherui/Button';
+import { NetworkResponse } from '../types';
+import { toast } from 'sonner';
+
+interface NetworkTabProps {
+    loading: boolean;
+    data: NetworkResponse | null;
+    error: string | null;
+    onRefresh: () => void;
+}
+
+export function NetworkTab({ loading, data, error, onRefresh }: NetworkTabProps) {
+    const { t } = useTranslation();
+
+    const copyToClipboard = (text: string) => {
+        navigator.clipboard.writeText(text);
+        toast.success(t('common.copied_to_clipboard'));
+    };
+
+    if (loading) {
+        return (
+            <div className='flex items-center justify-center py-12'>
+                <RefreshCw className='h-8 w-8 animate-spin text-primary' />
+            </div>
+        );
+    }
+
+    if (error) {
+        return (
+            <PageCard title={t('admin.node.view.network.error_title')} icon={AlertTriangle}>
+                <div className='p-6 bg-destructive/10 border border-destructive/20 rounded-2xl text-center space-y-4'>
+                    <p className='text-destructive'>{error}</p>
+                    <Button variant='outline' onClick={onRefresh}>
+                        {t('common.retry')}
+                    </Button>
+                </div>
+            </PageCard>
+        );
+    }
+
+    if (!data) return null;
+
+    const { ips } = data;
+
+    return (
+        <div className='space-y-6'>
+            <PageCard
+                title={t('admin.node.view.network.title')}
+                description={t('admin.node.view.network.description')}
+                icon={Network}
+            >
+                <div className='grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4'>
+                    {ips.ip_addresses.length === 0 ? (
+                        <div className='col-span-full p-12 text-center bg-muted/20 rounded-2xl border border-dashed border-border'>
+                            <p className='text-muted-foreground italic'>{t('admin.node.view.network.no_ips')}</p>
+                        </div>
+                    ) : (
+                        ips.ip_addresses.map((ip, index) => (
+                            <div
+                                key={index}
+                                className='group p-4 rounded-2xl bg-muted/30 border border-border/50 hover:border-primary/50 transition-all flex items-center justify-between'
+                            >
+                                <div className='flex items-center gap-3'>
+                                    <div className='p-2 rounded-xl bg-primary/10 group-hover:bg-primary/20 transition-colors'>
+                                        <Globe className='h-4 w-4 text-primary' />
+                                    </div>
+                                    <span className='font-mono text-sm'>{ip}</span>
+                                </div>
+                                <Button
+                                    variant='ghost'
+                                    size='sm'
+                                    className='opacity-0 group-hover:opacity-100 transition-opacity'
+                                    onClick={() => copyToClipboard(ip)}
+                                    title={t('common.copy')}
+                                >
+                                    <Copy className='h-3.5 w-3.5' />
+                                </Button>
+                            </div>
+                        ))
+                    )}
+                </div>
+            </PageCard>
+
+            <PageCard title={t('admin.node.view.network.total_ips')} icon={Network}>
+                <div className='flex items-center gap-4'>
+                    <Badge variant='outline' className='bg-primary/5 text-primary border-primary/10 px-4 py-2 text-sm'>
+                        {t('admin.node.view.network.total_ips')}: {ips.ip_addresses.length}
+                    </Badge>
+                    <p className='text-sm text-muted-foreground italic leading-relaxed'>
+                        {t('admin.node.view.network.help')}
+                    </p>
+                </div>
+            </PageCard>
+        </div>
+    );
+}

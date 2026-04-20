@@ -1,0 +1,15 @@
+parameters:
+	level: 4
+	paths:
+		- app
+	bootstrapFiles:
+		- storage/packages/autoload.php
+	excludePaths:
+		- app/routes
+		- storage
+		- storage/packages
+		- storage/addons
+		- storage/caches
+		- storage/cron
+	reportUnmatchedIgnoredErrors: false
+

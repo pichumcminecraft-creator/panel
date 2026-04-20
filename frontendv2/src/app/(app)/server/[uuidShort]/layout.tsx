@@ -1,0 +1,101 @@
+/*
+This file is part of FeatherPanel.
+
+Copyright (C) 2025 MythicalSystems Studios
+Copyright (C) 2025 FeatherPanel Contributors
+Copyright (C) 2025 Cassian Gherman (aka NaysKutzu)
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published
+by the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+See the LICENSE file or <https://www.gnu.org/licenses/>.
+*/
+
+import DashboardShell from '@/components/layout/DashboardShell';
+import { Metadata } from 'next';
+import ChatbotWidget from '@/components/ai/ChatbotWidget';
+
+type Props = {
+    params: Promise<{ uuidShort: string }>;
+};
+
+import { getBaseUrl } from '@/lib/settings-api';
+
+import { cookies } from 'next/headers';
+import { Server } from '@/types/server';
+
+async function getServer(uuidShort: string): Promise<Server | null> {
+    try {
+        const cookieStore = await cookies();
+
+        const allCookies = cookieStore.getAll();
+        const cookieHeader = allCookies.map((c) => `${c.name}=${c.value}`).join('; ');
+
+        const baseUrl = getBaseUrl();
+        const url = `${baseUrl}/api/user/servers/${uuidShort}`;
+
+        console.log(`[SEO] Fetching server details for uuidShort: '${uuidShort}' using URL: ${url}`);
+
+        const res = await fetch(url, {
+            headers: {
+                Cookie: cookieHeader,
+                Accept: 'application/json',
+            },
+            next: { revalidate: 10 },
+        });
+
+        if (!res.ok) {
+            console.error(`[SEO] Failed to fetch server ${uuidShort} from ${url}: ${res.status} ${res.statusText}`);
+            return null;
+        }
+
+        const data = await res.json();
+        console.log(`[SEO] Server fetch response for ${uuidShort}:`, JSON.stringify(data).substring(0, 200));
+        return data.success ? data.data : null;
+    } catch (error) {
+        console.error('[SEO] Error fetching server for metadata:', error);
+        return null;
+    }
+}
+
+export async function generateMetadata({ params }: Props): Promise<Metadata> {
+    const { uuidShort } = await params;
+
+    const server = await getServer(uuidShort);
+
+    const serverName = server?.name || `Server ${uuidShort}`;
+
+    const title = serverName;
+
+    return {
+        title: title,
+        openGraph: {
+            title: title,
+        },
+    };
+}
+
+import { ServerProvider } from '@/contexts/ServerContext';
+import { ServerSuspendedWrapper } from '@/components/server/ServerSuspendedWrapper';
+
+export default async function ServerLayout({
+    children,
+    params,
+}: {
+    children: React.ReactNode;
+    params: Promise<{ uuidShort: string }>;
+}) {
+    const { uuidShort } = await params;
+    const server = await getServer(uuidShort);
+
+    return (
+        <ServerProvider uuidShort={uuidShort} initialServer={server}>
+            <DashboardShell>
+                <ServerSuspendedWrapper>{children}</ServerSuspendedWrapper>
+            </DashboardShell>
+            <ChatbotWidget />
+        </ServerProvider>
+    );
+}

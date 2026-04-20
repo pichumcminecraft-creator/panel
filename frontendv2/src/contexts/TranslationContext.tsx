@@ -1,0 +1,237 @@
+/*
+This file is part of FeatherPanel.
+
+Copyright (C) 2025 MythicalSystems Studios
+Copyright (C) 2025 FeatherPanel Contributors
+Copyright (C) 2025 Cassian Gherman (aka NaysKutzu)
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published
+by the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+See the LICENSE file or <https://www.gnu.org/licenses/>.
+*/
+
+'use client';
+
+import { createContext, useContext, useEffect, useState, ReactNode, useCallback } from 'react';
+
+interface Language {
+    code: string;
+    name: string;
+    nativeName: string;
+}
+
+interface TranslationContextType {
+    locale: string;
+    translations: Record<string, unknown>;
+    availableLanguages: Language[];
+    setLocale: (locale: string) => Promise<void>;
+    t: (key: string, params?: Record<string, string>) => string;
+    loading: boolean;
+    initialLoading: boolean;
+}
+
+const TranslationContext = createContext<TranslationContextType | undefined>(undefined);
+
+const DEFAULT_LOCALE = 'en';
+const PRIMARY_LOCALE = 'en';
+const CACHE_VERSION = '1.2';
+
+export function TranslationProvider({ children }: { children: ReactNode }) {
+    const [locale, setLocaleState] = useState(() => {
+        if (typeof window !== 'undefined') {
+            return localStorage.getItem('locale') || DEFAULT_LOCALE;
+        }
+        return DEFAULT_LOCALE;
+    });
+    const [translations, setTranslations] = useState<Record<string, unknown>>({});
+    const [availableLanguages, setAvailableLanguages] = useState<Language[]>([
+        { code: 'en', name: 'English', nativeName: 'English' },
+    ]);
+    const [loading, setLoading] = useState(false);
+    const [initialLoading, setInitialLoading] = useState(true);
+
+    const deepMerge = (target: Record<string, unknown>, source: Record<string, unknown>): Record<string, unknown> => {
+        const output = { ...target };
+        for (const key in source) {
+            if (source[key] && typeof source[key] === 'object' && !Array.isArray(source[key])) {
+                output[key] = deepMerge(
+                    (target[key] as Record<string, unknown>) || {},
+                    source[key] as Record<string, unknown>,
+                );
+            } else {
+                output[key] = source[key];
+            }
+        }
+        return output;
+    };
+
+    const loadFullTranslations = useCallback(async (lang: string) => {
+        let frontendTranslations: Record<string, unknown> = {};
+        let backendPrimaryTranslations: Record<string, unknown> = {};
+        let backendLangTranslations: Record<string, unknown> = {};
+
+        try {
+            let frontendResponse = await fetch(`/locales/${lang}.json`);
+            if (!frontendResponse.ok && lang !== PRIMARY_LOCALE) {
+                frontendResponse = await fetch(`/locales/${PRIMARY_LOCALE}.json`);
+            }
+            if (frontendResponse.ok) {
+                frontendTranslations = await frontendResponse.json();
+            }
+        } catch (error) {
+            console.warn('Failed to load frontend translations:', error);
+        }
+
+        if (lang !== PRIMARY_LOCALE) {
+            try {
+                const backendPrimaryResponse = await fetch(`/api/system/translations/${PRIMARY_LOCALE}`);
+                if (backendPrimaryResponse.ok) {
+                    const backendPrimaryData = await backendPrimaryResponse.json();
+                    if (backendPrimaryData && typeof backendPrimaryData === 'object') {
+                        if (
+                            'success' in backendPrimaryData &&
+                            'data' in backendPrimaryData &&
+                            backendPrimaryData.success
+                        ) {
+                            backendPrimaryTranslations = (backendPrimaryData.data || {}) as Record<string, unknown>;
+                        } else {
+                            backendPrimaryTranslations = backendPrimaryData as Record<string, unknown>;
+                        }
+                    }
+                }
+            } catch (error) {
+                console.warn('Failed to load backend primary translations:', error);
+            }
+        }
+
+        try {
+            const backendResponse = await fetch(`/api/system/translations/${lang}`);
+            if (backendResponse.ok) {
+                const backendData = await backendResponse.json();
+                if (backendData && typeof backendData === 'object') {
+                    if ('success' in backendData && 'data' in backendData && backendData.success) {
+                        backendLangTranslations = (backendData.data || {}) as Record<string, unknown>;
+                    } else {
+                        backendLangTranslations = backendData as Record<string, unknown>;
+                    }
+                }
+            }
+        } catch (error) {
+            console.warn('Failed to load backend language translations:', error);
+        }
+
+        let mergedTranslations = frontendTranslations;
+        if (Object.keys(backendPrimaryTranslations).length > 0) {
+            mergedTranslations = deepMerge(mergedTranslations, backendPrimaryTranslations);
+        }
+        if (Object.keys(backendLangTranslations).length > 0) {
+            mergedTranslations = deepMerge(mergedTranslations, backendLangTranslations);
+        }
+
+        setTranslations(mergedTranslations);
+        const cacheKey = `translations_${lang}_${CACHE_VERSION}`;
+        localStorage.setItem(cacheKey, JSON.stringify(mergedTranslations));
+
+        setInitialLoading(false);
+
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    const loadAvailableLanguages = useCallback(async () => {
+        try {
+            const response = await fetch('/api/system/translations/languages');
+            if (response.ok) {
+                const data = await response.json();
+                console.log('[TranslationContext] Languages API response:', data);
+
+                if (data && typeof data === 'object') {
+                    if (data.success === true && Array.isArray(data.data)) {
+                        setAvailableLanguages(data.data);
+                        return;
+                    } else if (Array.isArray(data)) {
+                        setAvailableLanguages(data);
+                        return;
+                    } else if (data.data && Array.isArray(data.data)) {
+                        setAvailableLanguages(data.data);
+                        return;
+                    }
+                }
+
+                console.warn('[TranslationContext] Unexpected languages API response format:', data);
+            } else {
+                console.warn('[TranslationContext] Languages API returned non-OK status:', response.status);
+            }
+        } catch (error) {
+            console.warn('[TranslationContext] Failed to load available languages from API:', error);
+        }
+    }, []);
+
+    useEffect(() => {
+        loadFullTranslations(locale);
+        loadAvailableLanguages();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [locale]);
+
+    const setLocale = async (newLocale: string) => {
+        setLoading(true);
+        setLocaleState(newLocale);
+        localStorage.setItem('locale', newLocale);
+        await loadFullTranslations(newLocale);
+        setLoading(false);
+    };
+
+    const t = useCallback(
+        (key: string, params?: Record<string, string>): string => {
+            const keys = key.split('.');
+            let value: unknown = translations;
+
+            for (const k of keys) {
+                if (value && typeof value === 'object' && k in value) {
+                    value = (value as Record<string, unknown>)[k];
+                } else {
+                    return key;
+                }
+            }
+
+            if (typeof value !== 'string') {
+                return key;
+            }
+
+            if (params) {
+                return value.replace(/\{(\w+)\}/g, (match, paramKey) => {
+                    return params[paramKey] || match;
+                });
+            }
+
+            return value;
+        },
+        [translations],
+    );
+
+    return (
+        <TranslationContext.Provider
+            value={{
+                locale,
+                translations,
+                availableLanguages,
+                setLocale,
+                t,
+                loading,
+                initialLoading,
+            }}
+        >
+            {children}
+        </TranslationContext.Provider>
+    );
+}
+
+export function useTranslation() {
+    const context = useContext(TranslationContext);
+    if (!context) {
+        throw new Error('useTranslation must be used within TranslationProvider');
+    }
+    return context;
+}

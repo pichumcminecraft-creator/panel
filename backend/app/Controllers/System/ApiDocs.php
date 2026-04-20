@@ -1,0 +1,196 @@
+<?php
+
+/*
+ * This file is part of FeatherPanel.
+ *
+ * Copyright (C) 2025 MythicalSystems Studios
+ * Copyright (C) 2025 FeatherPanel Contributors
+ * Copyright (C) 2025 Cassian Gherman (aka NaysKutzu)
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published
+ * by the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * See the LICENSE file or <https://www.gnu.org/licenses/>.
+ */
+
+namespace App\Controllers\System;
+
+use App\Cache\Cache;
+use App\Helpers\ApiResponse;
+use OpenApi\Attributes as OA;
+use Symfony\Component\HttpFoundation\Request;
+use Symfony\Component\HttpFoundation\Response;
+
+#[OA\Info(
+    title: 'FeatherPanel API Documentation',
+    version: APP_VERSION,
+    description: 'The FeatherPanel API is a RESTful API that allows you to manage your FeatherPanel server and resources.',
+    termsOfService: 'https://mythical.systems/terms',
+    contact: new OA\Contact(
+        name: 'MythicalSystems',
+        url: 'https://mythical.systems',
+        email: 'support@mythical.systems'
+    ),
+    license: new OA\License(
+        name: 'MIT',
+        url: 'https://opensource.org/licenses/MIT'
+    )
+)]
+#[OA\Server(
+    url: '/',
+    description: 'FeatherPanel API Server'
+)]
+#[OA\Tag(name: 'System', description: 'System configuration and settings')]
+#[OA\Tag(name: 'Admin - Users', description: 'User management operations')]
+#[OA\Tag(name: 'Admin - Servers', description: 'Server management operations')]
+#[OA\Tag(name: 'Admin - Allocations', description: 'IP allocation management')]
+#[OA\Tag(name: 'Admin - Nodes', description: 'Node management operations')]
+#[OA\Tag(name: 'Admin - Realms', description: 'Realm management operations')]
+#[OA\Tag(name: 'Admin - Spells', description: 'Spell (egg) management operations')]
+#[OA\Tag(name: 'Admin - Roles', description: 'Role and permission management')]
+#[OA\Tag(name: 'Admin - Plugins', description: 'Plugin management operations')]
+#[OA\Tag(name: 'Admin - Settings', description: 'System settings management')]
+#[OA\Tag(name: 'Admin - Dashboard', description: 'Dashboard and statistics')]
+#[OA\Tag(name: 'Admin - Files', description: 'File management operations')]
+#[OA\Tag(name: 'Admin - Logs', description: 'Log viewing and management')]
+#[OA\Tag(name: 'Admin - Mail', description: 'Mail template management')]
+#[OA\Tag(name: 'General', description: 'General API endpoints')]
+class ApiDocs
+{
+    #[OA\Get(
+        path: '/api/openapi.json',
+        summary: 'Get OpenAPI specification',
+        description: 'Retrieve the complete OpenAPI 3.1 specification for the FeatherPanel API, including all documented endpoints, schemas, and metadata.',
+        tags: ['System'],
+        responses: [
+            new OA\Response(
+                response: 200,
+                description: 'OpenAPI specification retrieved successfully',
+                content: new OA\JsonContent(
+                    type: 'object',
+                    description: 'Complete OpenAPI 3.1 specification with all endpoints, schemas, and metadata'
+                )
+            ),
+            new OA\Response(response: 500, description: 'Internal server error - Failed to generate OpenAPI specification'),
+        ]
+    )]
+    public function index(Request $request): Response
+    {
+        // Determine cache headers based on APP_DEBUG
+        $cacheHeaders = [];
+        if (defined('APP_DEBUG') && APP_DEBUG === true) {
+            // No cache when in debug mode
+            $cacheHeaders = [
+                'Cache-Control' => 'no-store, no-cache, must-revalidate, max-age=0',
+                'Pragma' => 'no-cache',
+                'Expires' => '0',
+            ];
+        } else {
+            // Cache for 1 hour in production
+            $cacheHeaders = [
+                'Cache-Control' => 'public, max-age=3600',
+                'Expires' => gmdate('D, d M Y H:i:s', time() + 3600) . ' GMT',
+            ];
+        }
+
+        // Check if we have a cached version (only in production, not in debug mode)
+        $cacheKey = 'openapi:specification';
+        $openapiArray = null;
+
+        if (!defined('APP_DEBUG') || APP_DEBUG !== true) {
+            $cachedSpec = Cache::get($cacheKey);
+            if ($cachedSpec !== null) {
+                $openapiArray = $cachedSpec;
+            }
+        }
+
+        // If not cached, generate the OpenAPI spec
+        if ($openapiArray === null) {
+            // Suppress PHP warnings and errors to ensure clean JSON output
+            $oldErrorReporting = error_reporting(3);
+            ob_start();
+
+            try {
+                // Scan all controller directories
+                $controllersDir = realpath(__DIR__ . '/../');
+                $addonsDir = getcwd() . '/../storage/addons';
+                $scanPaths = [$controllersDir];
+
+                // Recursively add all directories under /storage/addons/
+                if ($addonsDir && is_dir($addonsDir)) {
+                    $iterator = new \RecursiveIteratorIterator(
+                        new \RecursiveDirectoryIterator($addonsDir, \RecursiveDirectoryIterator::SKIP_DOTS),
+                        \RecursiveIteratorIterator::SELF_FIRST
+                    );
+
+                    foreach ($iterator as $file) {
+                        if ($file->isDir()) {
+                            $scanPaths[] = $file->getPathname();
+                        }
+                    }
+                }
+
+                $openapi = \OpenApi\Generator::scan($scanPaths);
+
+                // Clean any output that might have been generated
+                ob_end_clean();
+                error_reporting($oldErrorReporting);
+
+                // Decode the OpenAPI spec
+                $openapiArray = json_decode($openapi->toJson(), true);
+
+                // Cache the OpenAPI spec (60 minutes = 1 hour)
+                if (!defined('APP_DEBUG') || APP_DEBUG !== true) {
+                    Cache::putJson($cacheKey, $openapiArray, 60);
+                }
+            } catch (\Exception $e) {
+                // Clean any output and restore error reporting
+                ob_end_clean();
+                error_reporting($oldErrorReporting);
+
+                // Return a basic OpenAPI spec if scanning fails
+                $openapiArray = [
+                    'openapi' => '3.1.0',
+                    'info' => [
+                        'title' => 'FeatherPanel API',
+                        'version' => APP_VERSION,
+                        'description' => 'The FeatherPanel API is a RESTful API that allows you to manage your FeatherPanel server and resources.',
+                        'contact' => [
+                            'name' => 'MythicalSystems',
+                            'url' => 'https://mythical.systems',
+                            'email' => 'support@mythical.systems',
+                        ],
+                        'license' => [
+                            'name' => 'MIT',
+                            'url' => 'https://opensource.org/licenses/MIT',
+                        ],
+                    ],
+                    'servers' => [
+                        [
+                            'url' => '/api',
+                            'description' => 'FeatherPanel API Server',
+                        ],
+                    ],
+                    'paths' => [],
+                    'components' => new \stdClass(),
+                    'tags' => [
+                        ['name' => 'System', 'description' => 'System configuration and settings'],
+                        ['name' => 'Redirects', 'description' => 'Redirect link management'],
+                    ],
+                ];
+            }
+        }
+
+        // Return the OpenAPI spec with cache headers
+        $response = ApiResponse::sendManualResponse($openapiArray, 200);
+
+        // Add cache headers to the response
+        foreach ($cacheHeaders as $header => $value) {
+            $response->headers->set($header, $value);
+        }
+
+        return $response;
+    }
+}

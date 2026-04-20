@@ -1,0 +1,530 @@
+<?php
+
+/*
+ * This file is part of FeatherPanel.
+ *
+ * Copyright (C) 2025 MythicalSystems Studios
+ * Copyright (C) 2025 FeatherPanel Contributors
+ * Copyright (C) 2025 Cassian Gherman (aka NaysKutzu)
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published
+ * by the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * See the LICENSE file or <https://www.gnu.org/licenses/>.
+ */
+
+namespace App\Controllers\Admin;
+
+use App\Chat\Node;
+use App\Chat\VmNode;
+use App\Chat\Activity;
+use App\Chat\Location;
+use App\Helpers\ApiResponse;
+use OpenApi\Attributes as OA;
+use App\CloudFlare\CloudFlareRealIP;
+use App\Plugins\Events\Events\LocationsEvent;
+use Symfony\Component\HttpFoundation\Request;
+use Symfony\Component\HttpFoundation\Response;
+
+#[OA\Schema(
+    schema: 'Location',
+    type: 'object',
+    properties: [
+        new OA\Property(property: 'id', type: 'integer', description: 'Location ID'),
+        new OA\Property(property: 'name', type: 'string', description: 'Location name'),
+        new OA\Property(property: 'description', type: 'string', nullable: true, description: 'Location description'),
+        new OA\Property(property: 'flag_code', type: 'string', nullable: true, description: 'ISO 3166-1 alpha-2 country code for flag display'),
+        new OA\Property(property: 'type', type: 'string', enum: ['game', 'vps', 'web'], description: 'Location purpose type (immutable after creation)'),
+        new OA\Property(property: 'created_at', type: 'string', format: 'date-time', description: 'Creation timestamp'),
+        new OA\Property(property: 'updated_at', type: 'string', format: 'date-time', description: 'Last update timestamp'),
+    ]
+)]
+#[OA\Schema(
+    schema: 'LocationPagination',
+    type: 'object',
+    properties: [
+        new OA\Property(property: 'current_page', type: 'integer', description: 'Current page number'),
+        new OA\Property(property: 'per_page', type: 'integer', description: 'Records per page'),
+        new OA\Property(property: 'total_records', type: 'integer', description: 'Total number of records'),
+        new OA\Property(property: 'total_pages', type: 'integer', description: 'Total number of pages'),
+        new OA\Property(property: 'has_next', type: 'boolean', description: 'Whether there is a next page'),
+        new OA\Property(property: 'has_prev', type: 'boolean', description: 'Whether there is a previous page'),
+        new OA\Property(property: 'from', type: 'integer', description: 'Starting record number'),
+        new OA\Property(property: 'to', type: 'integer', description: 'Ending record number'),
+    ]
+)]
+#[OA\Schema(
+    schema: 'LocationCreate',
+    type: 'object',
+    required: ['name', 'type'],
+    properties: [
+        new OA\Property(property: 'name', type: 'string', description: 'Location name', minLength: 2, maxLength: 255),
+        new OA\Property(property: 'description', type: 'string', nullable: true, description: 'Location description'),
+        new OA\Property(property: 'flag_code', type: 'string', nullable: true, description: 'ISO 3166-1 alpha-2 country code (e.g., "us", "ua") for flag display'),
+        new OA\Property(property: 'type', type: 'string', enum: ['game', 'vps', 'web'], description: 'Location purpose: game hosting, VPS/VDS, or web hosting (immutable after creation)'),
+        new OA\Property(property: 'id', type: 'integer', nullable: true, description: 'Optional location ID (useful for migrations from other platforms)'),
+    ]
+)]
+#[OA\Schema(
+    schema: 'LocationUpdate',
+    type: 'object',
+    properties: [
+        new OA\Property(property: 'name', type: 'string', description: 'Location name', minLength: 2, maxLength: 255),
+        new OA\Property(property: 'description', type: 'string', nullable: true, description: 'Location description'),
+        new OA\Property(property: 'flag_code', type: 'string', nullable: true, description: 'ISO 3166-1 alpha-2 country code (e.g., "us", "ua") for flag display. Set to null to remove the flag.'),
+        new OA\Property(property: 'type', type: 'string', enum: ['game', 'vps', 'web'], description: 'Location purpose: game hosting, VPS/VDS, or web hosting (immutable after creation)'),
+    ]
+)]
+class LocationsController
+{
+    #[OA\Get(
+        path: '/api/admin/locations',
+        summary: 'Get all locations',
+        description: 'Retrieve a paginated list of all locations with optional search functionality.',
+        tags: ['Admin - Locations'],
+        parameters: [
+            new OA\Parameter(
+                name: 'page',
+                in: 'query',
+                description: 'Page number for pagination',
+                required: false,
+                schema: new OA\Schema(type: 'integer', minimum: 1, default: 1)
+            ),
+            new OA\Parameter(
+                name: 'limit',
+                in: 'query',
+                description: 'Number of records per page',
+                required: false,
+                schema: new OA\Schema(type: 'integer', minimum: 1, maximum: 100, default: 10)
+            ),
+            new OA\Parameter(
+                name: 'search',
+                in: 'query',
+                description: 'Search term to filter locations by name',
+                required: false,
+                schema: new OA\Schema(type: 'string')
+            ),
+            new OA\Parameter(
+                name: 'type',
+                in: 'query',
+                description: 'Filter by location purpose (game = Wings/game servers, vps = VDS/VM nodes, web = web hosting)',
+                required: false,
+                schema: new OA\Schema(type: 'string', enum: ['game', 'vps', 'web'])
+            ),
+        ],
+        responses: [
+            new OA\Response(
+                response: 200,
+                description: 'Locations retrieved successfully',
+                content: new OA\JsonContent(
+                    properties: [
+                        new OA\Property(property: 'locations', type: 'array', items: new OA\Items(ref: '#/components/schemas/Location')),
+                        new OA\Property(property: 'pagination', ref: '#/components/schemas/LocationPagination'),
+                        new OA\Property(property: 'search', type: 'object', properties: [
+                            new OA\Property(property: 'query', type: 'string'),
+                            new OA\Property(property: 'has_results', type: 'boolean'),
+                        ]),
+                    ]
+                )
+            ),
+            new OA\Response(response: 401, description: 'Unauthorized'),
+            new OA\Response(response: 403, description: 'Forbidden - Insufficient permissions'),
+        ]
+    )]
+    public function index(Request $request): Response
+    {
+        $page = (int) $request->query->get('page', 1);
+        $limit = (int) $request->query->get('limit', 10);
+        $search = $request->query->get('search', '');
+        $typeRaw = strtolower(trim((string) $request->query->get('type', '')));
+        $typeFilter = in_array($typeRaw, ['game', 'vps', 'web'], true) ? $typeRaw : null;
+
+        if ($page < 1) {
+            $page = 1;
+        }
+        if ($limit < 1) {
+            $limit = 10;
+        }
+        if ($limit > 100) {
+            $limit = 100;
+        }
+
+        // Fetch locations with search, limit, and offset directly from the database
+        $offset = ($page - 1) * $limit;
+        $locations = Location::getAll($search, $limit, $offset, $typeFilter);
+        $total = Location::getCount($search, $typeFilter);
+
+        $totalPages = ceil($total / $limit);
+        $from = ($page - 1) * $limit + 1;
+        $to = min($from + $limit - 1, $total);
+
+        return ApiResponse::success([
+            'locations' => $locations,
+            'pagination' => [
+                'current_page' => $page,
+                'per_page' => $limit,
+                'total_records' => $total,
+                'total_pages' => $totalPages,
+                'has_next' => $page < $totalPages,
+                'has_prev' => $page > 1,
+                'from' => $from,
+                'to' => $to,
+            ],
+            'search' => [
+                'query' => $search,
+                'has_results' => count($locations) > 0,
+            ],
+        ], 'Locations fetched successfully', 200);
+    }
+
+    #[OA\Get(
+        path: '/api/admin/locations/{id}',
+        summary: 'Get location by ID',
+        description: 'Retrieve a specific location by its ID.',
+        tags: ['Admin - Locations'],
+        parameters: [
+            new OA\Parameter(
+                name: 'id',
+                in: 'path',
+                description: 'Location ID',
+                required: true,
+                schema: new OA\Schema(type: 'integer')
+            ),
+        ],
+        responses: [
+            new OA\Response(
+                response: 200,
+                description: 'Location retrieved successfully',
+                content: new OA\JsonContent(
+                    properties: [
+                        new OA\Property(property: 'location', ref: '#/components/schemas/Location'),
+                    ]
+                )
+            ),
+            new OA\Response(response: 400, description: 'Bad request - Invalid location ID'),
+            new OA\Response(response: 401, description: 'Unauthorized'),
+            new OA\Response(response: 403, description: 'Forbidden - Insufficient permissions'),
+            new OA\Response(response: 404, description: 'Location not found'),
+        ]
+    )]
+    public function show(Request $request, int $id): Response
+    {
+        $location = Location::getById($id);
+        if (!$location) {
+            return ApiResponse::error('Location not found', 'LOCATION_NOT_FOUND', 404);
+        }
+
+        return ApiResponse::success(['location' => $location], 'Location fetched successfully', 200);
+    }
+
+    #[OA\Put(
+        path: '/api/admin/locations',
+        summary: 'Create new location',
+        description: 'Create a new location with name and optional description. Validates field lengths.',
+        tags: ['Admin - Locations'],
+        requestBody: new OA\RequestBody(
+            required: true,
+            content: new OA\JsonContent(ref: '#/components/schemas/LocationCreate')
+        ),
+        responses: [
+            new OA\Response(
+                response: 201,
+                description: 'Location created successfully',
+                content: new OA\JsonContent(
+                    properties: [
+                        new OA\Property(property: 'location', ref: '#/components/schemas/Location'),
+                    ]
+                )
+            ),
+            new OA\Response(response: 400, description: 'Bad request - Invalid JSON, missing required fields, invalid data types, or validation errors'),
+            new OA\Response(response: 401, description: 'Unauthorized'),
+            new OA\Response(response: 403, description: 'Forbidden - Insufficient permissions'),
+            new OA\Response(response: 500, description: 'Internal server error - Failed to create location'),
+        ]
+    )]
+    public function create(Request $request): Response
+    {
+        $data = json_decode($request->getContent(), true);
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            return ApiResponse::error('Invalid JSON in request body', 'INVALID_JSON', 400);
+        }
+        $requiredFields = ['name'];
+        $missingFields = [];
+        foreach ($requiredFields as $field) {
+            if (!isset($data[$field]) || trim($data[$field]) === '') {
+                $missingFields[] = $field;
+            }
+        }
+        if (!empty($missingFields)) {
+            return ApiResponse::error('Missing required fields: ' . implode(', ', $missingFields), 'MISSING_REQUIRED_FIELDS');
+        }
+        if (!is_string($data['name'])) {
+            return ApiResponse::error('Name must be a string', 'INVALID_DATA_TYPE');
+        }
+        if (isset($data['description']) && !is_string($data['description'])) {
+            return ApiResponse::error('Description must be a string', 'INVALID_DATA_TYPE');
+        }
+        if (isset($data['flag_code']) && $data['flag_code'] !== null) {
+            if (!is_string($data['flag_code'])) {
+                return ApiResponse::error('Flag code must be a string', 'INVALID_DATA_TYPE');
+            }
+            $data['flag_code'] = strtolower(trim($data['flag_code']));
+            if ($data['flag_code'] === '') {
+                $data['flag_code'] = null;
+            }
+        }
+        if (strlen($data['name']) < 2 || strlen($data['name']) > 255) {
+            return ApiResponse::error('Name must be between 2 and 255 characters', 'INVALID_DATA_LENGTH');
+        }
+        $validTypes = ['game', 'vps', 'web'];
+        if (empty($data['type'])) {
+            return ApiResponse::error('Location type is required', 'MISSING_REQUIRED_FIELDS');
+        }
+        if (!in_array($data['type'], $validTypes, true)) {
+            return ApiResponse::error('Invalid location type. Must be one of: ' . implode(', ', $validTypes), 'INVALID_DATA_TYPE');
+        }
+        if (isset($data['id'])) {
+            if (!is_int($data['id']) && !ctype_digit((string) $data['id'])) {
+                return ApiResponse::error('ID must be an integer', 'INVALID_DATA_TYPE');
+            }
+            $data['id'] = (int) $data['id'];
+            if ($data['id'] < 1) {
+                return ApiResponse::error('ID must be a positive integer', 'INVALID_DATA_LENGTH');
+            }
+            // Check if location with this ID already exists
+            if (Location::getById($data['id'])) {
+                return ApiResponse::error('Location with this ID already exists', 'DUPLICATE_ID', 400);
+            }
+        }
+        $id = Location::create($data);
+        if (!$id) {
+            return ApiResponse::error('Failed to create location', 'LOCATION_CREATE_FAILED', 400);
+        }
+        $location = Location::getById($id);
+        // Log activity
+        $admin = $request->get('user');
+        Activity::createActivity([
+            'user_uuid' => $admin['uuid'] ?? null,
+            'name' => 'create_location',
+            'context' => 'Created location: ' . $location['name'],
+            'ip_address' => CloudFlareRealIP::getRealIP(),
+        ]);
+
+        // Emit event
+        global $eventManager;
+        if (isset($eventManager) && $eventManager !== null) {
+            $eventManager->emit(
+                LocationsEvent::onLocationCreated(),
+                [
+                    'location' => $location,
+                    'created_by' => $admin,
+                ]
+            );
+        }
+
+        return ApiResponse::success(['location' => $location], 'Location created successfully', 201);
+    }
+
+    #[OA\Patch(
+        path: '/api/admin/locations/{id}',
+        summary: 'Update location',
+        description: 'Update an existing location. Only provided fields will be updated. Validates field lengths.',
+        tags: ['Admin - Locations'],
+        parameters: [
+            new OA\Parameter(
+                name: 'id',
+                in: 'path',
+                description: 'Location ID',
+                required: true,
+                schema: new OA\Schema(type: 'integer')
+            ),
+        ],
+        requestBody: new OA\RequestBody(
+            required: true,
+            content: new OA\JsonContent(ref: '#/components/schemas/LocationUpdate')
+        ),
+        responses: [
+            new OA\Response(
+                response: 200,
+                description: 'Location updated successfully',
+                content: new OA\JsonContent(
+                    properties: [
+                        new OA\Property(property: 'location', ref: '#/components/schemas/Location'),
+                    ]
+                )
+            ),
+            new OA\Response(response: 400, description: 'Bad request - Invalid JSON, no data provided, invalid data types, or validation errors'),
+            new OA\Response(response: 401, description: 'Unauthorized'),
+            new OA\Response(response: 403, description: 'Forbidden - Insufficient permissions'),
+            new OA\Response(response: 404, description: 'Location not found'),
+            new OA\Response(response: 500, description: 'Internal server error - Failed to update location'),
+        ]
+    )]
+    public function update(Request $request, int $id): Response
+    {
+        $location = Location::getById($id);
+        if (!$location) {
+            return ApiResponse::error('Location not found', 'LOCATION_NOT_FOUND', 404);
+        }
+        $data = json_decode($request->getContent(), true);
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            return ApiResponse::error('Invalid JSON in request body', 'INVALID_JSON', 400);
+        }
+        if (empty($data)) {
+            return ApiResponse::error('No data provided', 'NO_DATA_PROVIDED', 400);
+        }
+        if (isset($data['id'])) {
+            unset($data['id']);
+        }
+
+        // Type is immutable after creation
+        if (isset($data['type']) && $data['type'] !== $location['type']) {
+            return ApiResponse::error(
+                'Location type cannot be changed after creation.',
+                'TYPE_IMMUTABLE',
+                400
+            );
+        }
+
+        if (isset($data['name'])) {
+            if (!is_string($data['name'])) {
+                return ApiResponse::error('Name must be a string', 'INVALID_DATA_TYPE');
+            }
+            if (strlen($data['name']) < 2 || strlen($data['name']) > 255) {
+                return ApiResponse::error('Name must be between 2 and 255 characters', 'INVALID_DATA_LENGTH');
+            }
+        }
+        if (isset($data['description']) && !is_string($data['description'])) {
+            return ApiResponse::error('Description must be a string', 'INVALID_DATA_TYPE');
+        }
+        if (isset($data['flag_code'])) {
+            if ($data['flag_code'] === null) {
+                $data['flag_code'] = null;
+            } else {
+                if (!is_string($data['flag_code'])) {
+                    return ApiResponse::error('Flag code must be a string', 'INVALID_DATA_TYPE');
+                }
+                $data['flag_code'] = strtolower(trim($data['flag_code']));
+                if ($data['flag_code'] === '') {
+                    $data['flag_code'] = null;
+                }
+            }
+        }
+        if (isset($data['type'])) {
+            $validTypes = ['game', 'vps', 'web'];
+            if (!in_array($data['type'], $validTypes, true)) {
+                return ApiResponse::error('Invalid location type. Must be one of: ' . implode(', ', $validTypes), 'INVALID_DATA_TYPE');
+            }
+        }
+        $success = Location::update($id, $data);
+        if (!$success) {
+            return ApiResponse::error('Failed to update location', 'LOCATION_UPDATE_FAILED', 400);
+        }
+        $location = Location::getById($id);
+        // Log activity
+        $admin = $request->get('user');
+        Activity::createActivity([
+            'user_uuid' => $admin['uuid'] ?? null,
+            'name' => 'update_location',
+            'context' => 'Updated location: ' . $location['name'],
+            'ip_address' => CloudFlareRealIP::getRealIP(),
+        ]);
+
+        // Emit event
+        global $eventManager;
+        if (isset($eventManager) && $eventManager !== null) {
+            $eventManager->emit(
+                LocationsEvent::onLocationUpdated(),
+                [
+                    'location' => $location,
+                    'updated_data' => $data,
+                    'updated_by' => $admin,
+                ]
+            );
+        }
+
+        return ApiResponse::success(['location' => $location], 'Location updated successfully', 200);
+    }
+
+    #[OA\Delete(
+        path: '/api/admin/locations/{id}',
+        summary: 'Delete location',
+        description: 'Permanently delete a location record.',
+        tags: ['Admin - Locations'],
+        parameters: [
+            new OA\Parameter(
+                name: 'id',
+                in: 'path',
+                description: 'Location ID',
+                required: true,
+                schema: new OA\Schema(type: 'integer')
+            ),
+        ],
+        responses: [
+            new OA\Response(
+                response: 200,
+                description: 'Location deleted successfully',
+                content: new OA\JsonContent(
+                    properties: [
+                        new OA\Property(property: 'message', type: 'string', description: 'Success message'),
+                    ]
+                )
+            ),
+            new OA\Response(response: 400, description: 'Bad request - Invalid location ID'),
+            new OA\Response(response: 401, description: 'Unauthorized'),
+            new OA\Response(response: 403, description: 'Forbidden - Insufficient permissions'),
+            new OA\Response(response: 404, description: 'Location not found'),
+            new OA\Response(response: 500, description: 'Internal server error - Failed to delete location'),
+        ]
+    )]
+    public function delete(Request $request, int $id): Response
+    {
+        $location = Location::getById($id);
+        if (!$location) {
+            return ApiResponse::error('Location not found', 'LOCATION_NOT_FOUND', 404);
+        }
+
+        if (Node::count(['location_id' => $id]) > 0) {
+            return ApiResponse::error('Cannot delete location: there are nodes assigned to this location. Please remove or reassign all nodes before deleting the location.', 'LOCATION_HAS_NODES', 400);
+        }
+
+        // Check if there are nodes assigned to this location
+        if (count(Node::getNodesByLocationId($id)) > 0) {
+            return ApiResponse::error('Cannot delete location: there are nodes assigned to this location. Please remove or reassign all nodes before deleting the location.', 'LOCATION_HAS_NODES', 400);
+        }
+
+        if (count(VmNode::getByLocationId($id)) > 0) {
+            return ApiResponse::error('Cannot delete location: there are VM nodes assigned to this location. Please remove or reassign all VM nodes before deleting the location.', 'LOCATION_HAS_VM_NODES', 400);
+        }
+
+        $success = Location::delete($id);
+        if (!$success) {
+            return ApiResponse::error('Failed to delete location', 'LOCATION_DELETE_FAILED', 400);
+        }
+
+        // Log activity
+        $admin = $request->get('user');
+        Activity::createActivity([
+            'user_uuid' => $admin['uuid'] ?? null,
+            'name' => 'delete_location',
+            'context' => 'Deleted location: ' . $location['name'],
+            'ip_address' => CloudFlareRealIP::getRealIP(),
+        ]);
+
+        // Emit event
+        global $eventManager;
+        if (isset($eventManager) && $eventManager !== null) {
+            $eventManager->emit(
+                LocationsEvent::onLocationDeleted(),
+                [
+                    'location' => $location,
+                    'deleted_by' => $admin,
+                ]
+            );
+        }
+
+        return ApiResponse::success([], 'Location deleted successfully', 200);
+    }
+}

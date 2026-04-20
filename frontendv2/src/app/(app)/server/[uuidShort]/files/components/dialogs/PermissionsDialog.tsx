@@ -1,0 +1,120 @@
+/*
+This file is part of FeatherPanel.
+
+Copyright (C) 2025 MythicalSystems Studios
+Copyright (C) 2025 FeatherPanel Contributors
+Copyright (C) 2025 Cassian Gherman (aka NaysKutzu)
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published
+by the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+See the LICENSE file or <https://www.gnu.org/licenses/>.
+*/
+
+'use client';
+
+import { useState, useEffect } from 'react';
+import {
+    Dialog,
+    DialogContent,
+    DialogHeader,
+    DialogTitle,
+    DialogFooter,
+    DialogDescription,
+} from '@/components/ui/dialog';
+import { Button } from '@/components/featherui/Button';
+import { Input } from '@/components/featherui/Input';
+import { toast } from 'sonner';
+import { filesApi } from '@/lib/files-api';
+import { ShieldCheck, Info } from 'lucide-react';
+import { useTranslation } from '@/contexts/TranslationContext';
+
+interface PermissionsDialogProps {
+    open: boolean;
+    onOpenChange: (open: boolean) => void;
+    uuid: string;
+    root: string;
+    files: string[];
+    onSuccess: () => void;
+}
+
+export function PermissionsDialog({ open, onOpenChange, uuid, root, files, onSuccess }: PermissionsDialogProps) {
+    const { t } = useTranslation();
+    const [mode, setMode] = useState('644');
+    const [loading, setLoading] = useState(false);
+
+    useEffect(() => {
+        if (open) {
+            setMode('644');
+        }
+    }, [open]);
+
+    const handleUpdate = async () => {
+        setLoading(true);
+        const toastId = toast.loading(t('files.dialogs.permissions.updating'));
+        try {
+            const updates = files.map((f) => ({ file: f, mode }));
+            await filesApi.changePermissions(uuid, root, updates);
+            toast.success(t('files.dialogs.permissions.success'), { id: toastId });
+            onSuccess();
+            onOpenChange(false);
+        } catch {
+            toast.error(t('files.dialogs.permissions.error'), { id: toastId });
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    return (
+        <Dialog open={open} onOpenChange={onOpenChange}>
+            <DialogContent className='sm:max-w-md'>
+                <DialogHeader>
+                    <div className='flex items-center gap-3'>
+                        <div className='flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 text-primary border border-primary/20'>
+                            <ShieldCheck className='h-5 w-5' />
+                        </div>
+                        <div>
+                            <DialogTitle>{t('files.dialogs.permissions.title')}</DialogTitle>
+                            <DialogDescription>
+                                {t('files.dialogs.permissions.description', { count: String(files.length) })}
+                            </DialogDescription>
+                        </div>
+                    </div>
+                </DialogHeader>
+
+                <div className='flex flex-col gap-4 py-4'>
+                    <div className='flex items-start gap-3 bg-amber-500/5 p-4 rounded-xl border border-amber-500/10'>
+                        <Info className='h-5 w-5 text-amber-500 shrink-0 mt-0.5' />
+                        <p className='text-xs text-amber-100/70 leading-relaxed'>
+                            {t('files.dialogs.permissions.info')}
+                        </p>
+                    </div>
+
+                    <div className='space-y-2'>
+                        <label className='text-xs font-semibold uppercase tracking-wider text-muted-foreground ml-1'>
+                            {t('files.dialogs.permissions.mode_label')}
+                        </label>
+                        <Input
+                            placeholder={t('files.dialogs.permissions.mode_placeholder')}
+                            value={mode}
+                            onChange={(e) => setMode(e.target.value)}
+                            className='bg-white/5 border-white/10 text-center text-lg font-mono tracking-widest'
+                            maxLength={4}
+                        />
+                    </div>
+                </div>
+
+                <DialogFooter>
+                    <Button variant='ghost' onClick={() => onOpenChange(false)}>
+                        {t('files.dialogs.permissions.cancel')}
+                    </Button>
+                    <Button variant='default' onClick={handleUpdate} disabled={loading || !mode} className=' h-10 px-6'>
+                        {t('files.dialogs.permissions.update')}
+                    </Button>
+                </DialogFooter>
+            </DialogContent>
+        </Dialog>
+    );
+}

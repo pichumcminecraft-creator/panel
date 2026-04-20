@@ -1,0 +1,436 @@
+@import 'tailwindcss';
+@plugin "@tailwindcss/typography";
+
+:root {
+    --background: 0 0% 100%;
+    --foreground: 0 0% 9%;
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 9%;
+    /* Default to Purple */
+    --primary: 262 83% 58%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 0 0% 96%;
+    --secondary-foreground: 0 0% 9%;
+    --muted: 0 0% 96%;
+    --muted-foreground: 0 0% 45%;
+    --accent: 0 0% 96%;
+    --accent-foreground: 0 0% 9%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 0 0% 90%;
+    --input: 0 0% 90%;
+    --ring: 262 83% 58%;
+    --radius: 0.5rem;
+    /* Default UI font (can be overridden via theme). */
+    --app-font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+@theme inline {
+    --color-background: hsl(var(--background));
+    --color-foreground: hsl(var(--foreground));
+    --color-card: hsl(var(--card));
+    --color-card-foreground: hsl(var(--card-foreground));
+    --color-popover: hsl(var(--popover));
+    --color-popover-foreground: hsl(var(--popover-foreground));
+    --color-primary: hsl(var(--primary));
+    --color-primary-foreground: hsl(var(--primary-foreground));
+    --color-secondary: hsl(var(--secondary));
+    --color-secondary-foreground: hsl(var(--secondary-foreground));
+    --color-muted: hsl(var(--muted));
+    --color-muted-foreground: hsl(var(--muted-foreground));
+    --color-accent: hsl(var(--accent));
+    --color-accent-foreground: hsl(var(--accent-foreground));
+    --color-destructive: hsl(var(--destructive));
+    --color-destructive-foreground: hsl(var(--destructive-foreground));
+    --color-border: hsl(var(--border));
+    --color-input: hsl(var(--input));
+    --color-ring: hsl(var(--ring));
+    /* Tie Tailwind's font-sans to the app font variable. */
+    --font-sans: var(--app-font-family);
+    --font-mono: var(--font-geist-mono);
+}
+
+.dark {
+    --background: 220 15% 6%; /* Deep dark blue-grey/black for premium look */
+    --foreground: 210 20% 98%;
+    --card: 220 15% 9%;
+    --card-foreground: 210 20% 98%;
+    --popover: 220 15% 9%;
+    --popover-foreground: 210 20% 98%;
+    --primary: 262 83% 58%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 0 0% 15%;
+    --secondary-foreground: 0 0% 93%;
+    --muted: 0 0% 15%;
+    --muted-foreground: 0 0% 64%;
+    --accent: 0 0% 15%;
+    --accent-foreground: 0 0% 93%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 220 15% 8%; /* Almost background color to hide borders */
+    --input: 220 15% 10%;
+    --ring: 262 83% 58%;
+}
+
+body {
+    background: hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-family: var(--app-font-family);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+@keyframes loading-bar {
+    0% {
+        background-position: 200% 0;
+    }
+    100% {
+        background-position: -200% 0;
+    }
+}
+
+@keyframes bounce {
+    0%,
+    100% {
+        transform: translateY(0);
+    }
+    50% {
+        transform: translateY(-10px);
+    }
+}
+
+@keyframes fadeInUp {
+    from {
+        opacity: 0;
+        transform: translateY(12px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes scaleIn {
+    from {
+        opacity: 0;
+        transform: scale(0.96);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+@keyframes slideInRight {
+    from {
+        opacity: 0;
+        transform: translateX(8px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+@keyframes shimmer {
+    0% {
+        background-position: -200% 0;
+    }
+    100% {
+        background-position: 200% 0;
+    }
+}
+
+@keyframes pulse-soft {
+    0%,
+    100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.7;
+    }
+}
+
+@keyframes float {
+    0%,
+    100% {
+        transform: translateY(0);
+    }
+    50% {
+        transform: translateY(-4px);
+    }
+}
+
+/* Auth background: slow aurora-style blob drift */
+@keyframes auth-blob-1 {
+    0%,
+    100% {
+        transform: translate(0, 0) scale(1);
+        opacity: 0.6;
+    }
+    33% {
+        transform: translate(8%, -5%) scale(1.05);
+        opacity: 0.8;
+    }
+    66% {
+        transform: translate(-5%, 8%) scale(0.95);
+        opacity: 0.5;
+    }
+}
+@keyframes auth-blob-2 {
+    0%,
+    100% {
+        transform: translate(0, 0) scale(1);
+        opacity: 0.5;
+    }
+    33% {
+        transform: translate(-10%, 6%) scale(1.08);
+        opacity: 0.7;
+    }
+    66% {
+        transform: translate(6%, -8%) scale(0.92);
+        opacity: 0.6;
+    }
+}
+@keyframes auth-blob-3 {
+    0%,
+    100% {
+        transform: translate(-50%, -50%) scale(1);
+        opacity: 0.4;
+    }
+    50% {
+        transform: translate(-48%, -52%) scale(1.1);
+        opacity: 0.6;
+    }
+}
+
+.animate-fade-in {
+    animation: fadeIn 0.5s ease-out forwards;
+}
+
+.animate-fade-in-up {
+    animation: fadeInUp 0.4s ease-out forwards;
+}
+
+.animate-scale-in {
+    animation: scaleIn 0.3s ease-out forwards;
+}
+
+.animate-slide-in-right {
+    animation: slideInRight 0.35s ease-out forwards;
+}
+
+.animate-loading-bar {
+    animation: loading-bar 1.5s ease-in-out infinite;
+}
+
+.animate-spin {
+    animation: spin 1s linear infinite;
+}
+
+.animate-bounce {
+    animation: bounce 2s ease-in-out infinite;
+}
+
+.animate-pulse-soft {
+    animation: pulse-soft 2s ease-in-out infinite;
+}
+
+.animate-float {
+    animation: float 4s ease-in-out infinite;
+}
+
+.animate-auth-blob-1 {
+    animation: auth-blob-1 22s ease-in-out infinite;
+}
+.animate-auth-blob-2 {
+    animation: auth-blob-2 28s ease-in-out infinite;
+}
+.animate-auth-blob-3 {
+    animation: auth-blob-3 18s ease-in-out infinite;
+}
+
+/* Stagger delays for list children - use .stagger-children and .stagger-child */
+.stagger-children .stagger-child {
+    opacity: 0;
+    animation: fadeInUp 0.4s ease-out forwards;
+}
+
+.stagger-children .stagger-child:nth-child(1) {
+    animation-delay: 0.02s;
+}
+.stagger-children .stagger-child:nth-child(2) {
+    animation-delay: 0.05s;
+}
+.stagger-children .stagger-child:nth-child(3) {
+    animation-delay: 0.08s;
+}
+.stagger-children .stagger-child:nth-child(4) {
+    animation-delay: 0.11s;
+}
+.stagger-children .stagger-child:nth-child(5) {
+    animation-delay: 0.14s;
+}
+.stagger-children .stagger-child:nth-child(6) {
+    animation-delay: 0.17s;
+}
+.stagger-children .stagger-child:nth-child(7) {
+    animation-delay: 0.2s;
+}
+.stagger-children .stagger-child:nth-child(8) {
+    animation-delay: 0.23s;
+}
+.stagger-children .stagger-child:nth-child(9) {
+    animation-delay: 0.26s;
+}
+.stagger-children .stagger-child:nth-child(10) {
+    animation-delay: 0.29s;
+}
+.stagger-children .stagger-child:nth-child(11) {
+    animation-delay: 0.32s;
+}
+.stagger-children .stagger-child:nth-child(12) {
+    animation-delay: 0.35s;
+}
+.stagger-children .stagger-child:nth-child(13) {
+    animation-delay: 0.38s;
+}
+.stagger-children .stagger-child:nth-child(14) {
+    animation-delay: 0.41s;
+}
+.stagger-children .stagger-child:nth-child(15) {
+    animation-delay: 0.44s;
+}
+
+/* Hover lift - subtle only, no glow */
+.hover-lift {
+    transition: transform 0.2s ease;
+}
+.hover-lift:hover {
+    transform: translateY(-1px);
+}
+
+.hover-glow:hover {
+    /* No glow - kept for class compatibility */
+}
+
+/* Card and button press feedback */
+.hover-scale:active {
+    transform: scale(0.98);
+}
+.hover-scale {
+    transition: transform 0.15s ease;
+}
+
+/* Focus ring animation */
+.focus-ring-animate:focus-visible {
+    outline: none;
+    animation: focusRing 0.25s ease-out;
+}
+@keyframes focusRing {
+    from {
+        box-shadow: 0 0 0 0 hsl(var(--ring));
+    }
+    to {
+        box-shadow: 0 0 0 3px hsl(var(--ring) / 0.4);
+    }
+}
+
+/* Motion preferences: only apply inside .motion-content so preloader & top loading bar are never affected */
+[data-motion='none'] .motion-content,
+[data-motion='none'] .motion-content *,
+[data-motion='none'] .motion-content *::before,
+[data-motion='none'] .motion-content *::after {
+    animation-duration: 0s !important;
+    animation-delay: 0s !important;
+    transition-duration: 0s !important;
+    transition-delay: 0s !important;
+}
+
+[data-motion='reduced'] .motion-content,
+[data-motion='reduced'] .motion-content *,
+[data-motion='reduced'] .motion-content *::before,
+[data-motion='reduced'] .motion-content *::after {
+    animation-duration: 0.15s !important;
+    transition-duration: 0.15s !important;
+}
+
+/* When motion is none, stagger children must be visible immediately (no opacity: 0 flash) */
+[data-motion='none'] .motion-content .stagger-children .stagger-child {
+    opacity: 1 !important;
+    animation: none !important;
+}
+
+/* Loading/preloader areas: always allow normal animation so spinners don't flicker */
+[data-motion='none'] .motion-content .motion-always,
+[data-motion='none'] .motion-content .motion-always *,
+[data-motion='none'] .motion-content .motion-always *::before,
+[data-motion='none'] .motion-content .motion-always *::after {
+    animation-duration: 0.5s !important;
+    animation-delay: 0s !important;
+    transition-duration: 0.2s !important;
+    transition-delay: 0s !important;
+}
+
+[data-motion='reduced'] .motion-content .motion-always,
+[data-motion='reduced'] .motion-content .motion-always *,
+[data-motion='reduced'] .motion-content .motion-always *::before,
+[data-motion='reduced'] .motion-content .motion-always *::after {
+    animation-duration: 0.4s !important;
+    transition-duration: 0.2s !important;
+}
+
+/* Custom scrollbar utilities */
+.hide-scrollbar::-webkit-scrollbar {
+    display: none;
+}
+
+.hide-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+}
+
+/* Global Premium scrollbar */
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: hsl(var(--muted-foreground) / 0.2);
+    border-radius: 10px;
+    transition: all 0.3s ease;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--primary) / 0.4);
+}
+
+/* For Firefox */
+* {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--muted-foreground) / 0.2) transparent;
+}
